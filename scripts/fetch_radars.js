@@ -1,4 +1,9 @@
 // scripts/fetch_radars.js
+// Genera radars/today.geojson (calles de León con radar móvil HOY)
+// 1) Rastrea la web del Ayto para hallar el PDF de "Radares"
+// 2) Extrae el bloque del día (mañana/tarde) y las vías
+// 3) Busca cada vía en OSM (Overpass) y crea GeoJSON
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetch } from "undici";
@@ -6,68 +11,44 @@ import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const OUT = path.join(process.cwd(), "radars", "today.geojson");
 const TZ = "Europe/Madrid";
-const BBOX_LEON = "42.56,-5.62,42.65,-5.50";
+const BBOX_LEON = "42.56,-5.62,42.65,-5.50"; // S,W,N,E aprox León capital
+
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
+// ---------- fecha local ES (sin reparsear strings) ----------
 function hoyES() {
   const f = new Intl.DateTimeFormat("es-ES", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
+    timeZone: TZ, year: "numeric", month: "numeric", day: "numeric",
   });
   const parts = Object.fromEntries(
     f.formatToParts(new Date()).map(p => [p.type, p.value])
   );
-  return {
-    day: Number(parts.day),
-    month: Number(parts.month),
-    year: Number(parts.year),
-  };
+  return { day: Number(parts.day), month: Number(parts.month), year: Number(parts.year) };
 }
 
-// --- 1) CRAWLER: busca PDFs de "Radares" en noticias recientes ---
+// ---------- utilidades HTML ----------
 const NEWS_PAGES = [
   "https://www.aytoleon.es/es/actualidad/noticias",
-  // Páginas de listados típicos
   "https://www.aytoleon.es/es/actualidad/noticias/Paginas/default.aspx",
 ];
 const HREF_RE = /href\s*=\s*"(.*?)"/gi;
-
-async function listCandidateNewsPages() {
-  // Intenta paginaciones simple: ?page=2..6 y /Paginas/default.aspx?Paged=TRUE
-  const urls = new Set(NEWS_PAGES);
-  for (let i = 2; i <= 8; i++) {
-    urls.add(`https://www.aytoleon.es/es/actualidad/noticias?page=${i}`);
-  }
-  // Algunas noticias modernas usan ruta /es/actualidad/noticias/articulos/<slug>
-  return [...urls];
-}
-
-function abs(base, href) {
-  try {
-    return new URL(href, base).toString();
-  } catch { return null; }
-}
 
 async function fetchText(u) {
   const r = await fetch(u, { headers: { "User-Agent": "leon-radares/1.0" }});
   if (!r.ok) throw new Error(`HTTP ${r.status} ${u}`);
   return await r.text();
 }
-
+function abs(base, href) {
+  try { return new URL(href, base).toString(); } catch { return null; }
+}
 function extractLinks(html, base) {
-  const out = [];
-  let m;
+  const out = []; let m;
   while ((m = HREF_RE.exec(html)) !== null) {
-    const u = abs(base, m[1]);
-    if (u) out.push(u);
+    const u = abs(base, m[1]); if (u) out.push(u);
   }
   return out;
 }
-
 function scoreByMonth(u, monthIdx, year) {
-  // Prioriza PDFs que mencionen el mes/año actual
   const mes = MESES[monthIdx-1];
   const s = decodeURIComponent(u).toLowerCase();
   let score = 0;
@@ -78,39 +59,29 @@ function scoreByMonth(u, monthIdx, year) {
   return score;
 }
 
+// ---------- 1) Descubrir PDF de "Radares" ----------
 async function discoverRadarPDF() {
   const { month, year } = hoyES();
-  const pages = await listCandidateNewsPages();
+  const pages = new Set(NEWS_PAGES);
+  for (let i = 2; i <= 8; i++) pages.add(`https://www.aytoleon.es/es/actualidad/noticias?page=${i}`);
 
   const pdfs = new Set();
   for (const p of pages) {
     try {
       const html = await fetchText(p);
-      const links = extractLinks(html, p);
-      // Mantén solo enlaces a artículos o PDFs
-      for (const l of links) {
-        if (l.toLowerCase().endsWith(".pdf") && /radares/i.test(l)) {
-          pdfs.add(l);
-        }
-        // También entra a artículos y busca PDFs dentro
-        if (/\/articulos\//i.test(l)) pdfs.add(l);
+      for (const l of extractLinks(html, p)) {
+        if (l.toLowerCase().endsWith(".pdf") && /radares/i.test(l)) pdfs.add(l);
+        if (/\/articulos\//i.test(l)) pdfs.add(l); // abrir artículos luego
       }
     } catch {}
   }
 
-  // Abre artículos y saca PDFs internos
-  const more = [];
-  for (const l of [...pdfs]) {
-    if (!l.toLowerCase().endsWith(".pdf")) more.push(l);
-  }
-  for (const art of more.slice(0, 30)) { // limita 30 artículos
+  const artLinks = [...pdfs].filter(l => !l.toLowerCase().endsWith(".pdf")).slice(0, 30);
+  for (const art of artLinks) {
     try {
       const html = await fetchText(art);
-      const links = extractLinks(html, art);
-      for (const u of links) {
-        if (u.toLowerCase().endsWith(".pdf") && /radares/i.test(u)) {
-          pdfs.add(u);
-        }
+      for (const u of extractLinks(html, art)) {
+        if (u.toLowerCase().endsWith(".pdf") && /radares/i.test(u)) pdfs.add(u);
       }
     } catch {}
   }
@@ -120,12 +91,11 @@ async function discoverRadarPDF() {
     .map(u => ({ u, s: scoreByMonth(u, month, year) }))
     .sort((a,b) => b.s - a.s);
 
-  if (ranked.length === 0) throw new Error("No se localizaron PDFs de radares en noticias.");
-  const best = ranked[0].u;
-  return best;
+  if (!ranked.length) throw new Error("No se localizaron PDFs de radares en noticias.");
+  return ranked[0].u;
 }
 
-// --- 2) PDF → texto ---
+// ---------- 2) PDF → texto ----------
 async function pdfToTextFromUrl(url) {
   const r = await fetch(url, { headers: { "User-Agent": "leon-radares/1.0" }});
   if (!r.ok) throw new Error(`HTTP ${r.status} PDF`);
@@ -140,64 +110,81 @@ async function pdfToTextFromUrl(url) {
   return text;
 }
 
-// --- 3) Parseo del día ---
-function norm(s) {
-  return s
-    .replace(/\b(avda?\.?|av\.)\b/gi, "Avenida")
-    .replace(/\b(c\/|c\.\s?|calle)\b/gi, "Calle")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
-
+// ---------- 3) Parseo del bloque del día ----------
 function parseStreetsForDay(txt, day) {
-  // Busca una tabla por día; tolera columnas
-  const reBlock = new RegExp(`\\n\\s*${day}\\s+[\\s\\S]*?(?=\\n\\s*${day + 1}\\s+|\\n\\s*\\d+\\s+|$)`, "i");
+  // Empieza en: ^día (mañana|tarde). Termina en: ^otro día (mañana|tarde) o fin.
+  const reBlock = new RegExp(
+    String.raw`(^|\n)\s*${day}\s+(mañana|tarde)[\s\S]*?(?=(^|\n)\s*(?:[1-9]|[12]\d|3[01])\s+(mañana|tarde)|$)`,
+    "i"
+  );
   const m = txt.match(reBlock);
   if (!m) return [];
-  const block = m[0]
+
+  const block = m[0];
+  const cleaned = block
+    .replace(/\bGABINETE DE COMUNICACIÓN\b/gi, "")
     .replace(/\b(mañana|tarde)\b/gi, "")
-    .replace(/km\/h|velocidad.*?\n/gi, "")
-    .replace(/[0-9]{1,3}\s*$/gm, "")
-    .replace(/[0-9]+/g, " ")
+    .replace(/km\/h|velocidad.*?(\n|$)/gim, " ")
+    .replace(/(\s|^)(20|30|40|50|60|70|80|90|100)(\s|$)/g, " ") // velocidades sueltas
+    .replace(/[0-9]{1,3}\s*$/gm, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+
+  const lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
+
+  const norm = s => s
+    .replace(/\b(avda?\.?|av\.)\b/gi, "Avenida")
+    .replace(/\b(c\/|c\.\s?|calle)\b/gi, "Calle")
+    .replace(/^\W+|\W+$/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  const lines = block.split(/\n+/).map(s => s.trim()).filter(Boolean);
-  if (lines.length && /^\d+\b/.test(lines[0])) lines.shift();
-
   const vias = [];
-  for (const s of lines) {
-    const v = norm(s).replace(/^\W+|\W+$/g, "");
+  for (const raw of lines) {
+    if (/^(?:día|turno|\W*)$/i.test(raw)) continue;
+    const v = norm(raw);
     if (v && !vias.includes(v)) vias.push(v);
   }
   return vias;
 }
 
-// --- 4) Overpass para cada vía ---
+// ---------- 4) Overpass: buscar la vía (con variantes) ----------
 async function overpassWaysForName(name) {
-  const query = `
+  const variants = (() => {
+    const v = [name];
+    if (!/^calle\s/i.test(name)) v.push("Calle " + name);
+    if (!/^avenida\s/i.test(name)) v.push("Avenida " + name);
+    if (/^Paseo\s/i.test(name) === false) v.push("Paseo " + name);
+    return [...new Set(v)];
+  })();
+
+  for (const qname of variants) {
+    const query = `
 [out:json][timeout:25];
 (
-  way["name"="${name}"](${BBOX_LEON});
+  way["name"="${qname}"](${BBOX_LEON});
 );
 out geom;`;
-  const r = await fetch("https://overpass-api.de/api/interpreter", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-    body: "data=" + encodeURIComponent(query)
-  });
-  if (!r.ok) return [];
-  const j = await r.json();
-  const lines = [];
-  for (const e of j.elements || []) {
-    if (e.type === "way" && Array.isArray(e.geometry)) {
-      lines.push(e.geometry.map(p => [p.lon, p.lat]));
+    const r = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: "data=" + encodeURIComponent(query)
+    });
+    if (!r.ok) continue;
+    const j = await r.json();
+    const lines = [];
+    for (const e of j.elements || []) {
+      if (e.type === "way" && Array.isArray(e.geometry)) {
+        lines.push(e.geometry.map(p => [p.lon, p.lat]));
+      }
     }
+    if (lines.length) return lines;
   }
-  return lines;
+  return [];
 }
 
-// --- 5) Main ---
+// ---------- 5) Main ----------
 async function main() {
   const { day } = hoyES();
   await fs.mkdir(path.dirname(OUT), { recursive: true });
@@ -223,6 +210,7 @@ async function main() {
         ? { type: "LineString", coordinates: mls[0] }
         : { type: "MultiLineString", coordinates: mls }
     });
+    // cortesía Overpass (evitar rate limit)
     await new Promise(r => setTimeout(r, 600));
   }
 
