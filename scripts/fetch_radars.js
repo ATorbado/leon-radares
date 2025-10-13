@@ -134,8 +134,10 @@ function parseStreetsForDay(txt, day) {
   const lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
 
   const norm = s => s
+    .replace(/\./g, " ")
     .replace(/\b(avda?\.?|av\.)\b/gi, "Avenida")
     .replace(/\b(c\/|c\.\s?|calle)\b/gi, "Calle")
+    .replace(/\b(de la|de los|de las|de|del)\b/gi, m => m.toLowerCase())
     .replace(/^\W+|\W+$/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
@@ -151,27 +153,49 @@ function parseStreetsForDay(txt, day) {
 
 // ---------- 4) Overpass: buscar la vía (con variantes) ----------
 async function overpassWaysForName(name) {
-  const variants = (() => {
-    const v = [name];
-    if (!/^calle\s/i.test(name)) v.push("Calle " + name);
-    if (!/^avenida\s/i.test(name)) v.push("Avenida " + name);
-    if (/^Paseo\s/i.test(name) === false) v.push("Paseo " + name);
-    return [...new Set(v)];
-  })();
+  // 1) Normaliza: quita puntos, duplica espacios, expande Avda.
+  const base = name
+    .replace(/\./g, " ")
+    .replace(/\b(avda?\.?|av)\b/gi, "Avenida")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 
-  for (const qname of variants) {
-    const query = `
+  // 2) Construye variantes con prefijos frecuentes
+  const variants = new Set([
+    base,
+    /^calle\s/i.test(base) ? base : "Calle " + base,
+    /^avenida\s/i.test(base) ? base : "Avenida " + base,
+    /^paseo\s/i.test(base) ? base : "Paseo " + base,
+    /^plaza\s/i.test(base) ? base : "Plaza " + base,
+    /^glorieta\s/i.test(base) ? base : "Glorieta " + base,
+  ]);
+
+  // 3) Utilidad: crear regex tolerante (case-insensitive, espacios flexibles, acentos opcionales)
+  const accentClass = (c) => {
+    const map = { a: "[aáà]", e: "[eéè]", i: "[iíì]", o: "[oóò]", u: "[uúùü]" };
+    const lower = c.toLowerCase();
+    return map[lower] ? map[lower] : c.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  };
+  const toRegex = (s) => {
+    // Palabras → .* entre ellas (permite abreviaturas tipo "José M Suárez")
+    const tokens = s.split(/\s+/).filter(Boolean);
+    const pattern = tokens.map(t => t.split("").map(accentClass).join("")).join(".*");
+    return `(?i)^.*${pattern}.*$`;
+  };
+
+  // 4) Prueba primero coincidencia exacta; luego regex amplio
+  const BBOX = "42.56,-5.62,42.65,-5.50";
+  const tryQuery = async (filter) => {
+    const q = `
 [out:json][timeout:25];
-(
-  way["name"="${qname}"](${BBOX_LEON});
-);
+way["name"${filter}](${BBOX});
 out geom;`;
     const r = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: "data=" + encodeURIComponent(query)
+      body: "data=" + encodeURIComponent(q)
     });
-    if (!r.ok) continue;
+    if (!r.ok) return [];
     const j = await r.json();
     const lines = [];
     for (const e of j.elements || []) {
@@ -179,10 +203,23 @@ out geom;`;
         lines.push(e.geometry.map(p => [p.lon, p.lat]));
       }
     }
+    return lines;
+  };
+
+  // 4a) exactas
+  for (const v of variants) {
+    const lines = await tryQuery(`="${v}"`);
+    if (lines.length) return lines;
+  }
+  // 4b) regex tolerante
+  for (const v of variants) {
+    const rx = toRegex(v);
+    const lines = await tryQuery(`~"${rx}"`);
     if (lines.length) return lines;
   }
   return [];
 }
+
 
 // ---------- 5) Main ----------
 async function main() {
