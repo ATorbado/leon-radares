@@ -1,24 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import pdfParse from "pdf-parse";
 import { fetch } from "undici";
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const OUT = path.join(process.cwd(), "radars", "today.geojson");
 const TZ = "Europe/Madrid";
 
+const PDF_CANDIDATES = [
+  // Oficial septiembre 2025 (verificado)
+  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias2/Radares%20septiembre%202025.pdf"
+  // Añade aquí octubre cuando el Ayuntamiento publique el PDF del mes.
+];
+
 function todayES() {
   const d = new Date(new Date().toLocaleString("en-GB", { timeZone: TZ }));
-  const day = d.getDate();
-  const month = d.getMonth() + 1;
-  const year = d.getFullYear();
-  return { day, month, year };
+  return { day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear() };
 }
-
-// URLs de ejemplo; amplía cada mes o añade crawler más adelante
-const PDF_CANDIDATES = [
-  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias2/Radares%20octubre%202025.pdf",
-  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias2/Radares%20septiembre%202025.pdf"
-];
 
 async function downloadFirstWorking(urls) {
   for (const u of urls) {
@@ -28,34 +25,43 @@ async function downloadFirstWorking(urls) {
   throw new Error("No se pudo descargar el PDF mensual.");
 }
 
+async function pdfToText(uint8) {
+  const doc = await pdfjs.getDocument({ data: uint8 }).promise;
+  let text = "";
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const tc = await page.getTextContent();
+    text += tc.items.map(it => it.str).join("\n") + "\n";
+  }
+  return text;
+}
+
+// Heurística sencilla: extrae bloque del día actual y lista de vías únicas.
 function parseStreetsForDay(txt, day) {
-  const reBlock = new RegExp(`\\n${day}\\s+[\\s\\S]*?(?=\\n${day + 1}\\s+|\\n\\d+\\s+|$)`, "g");
+  const reBlock = new RegExp(`\\n${day}\\s+[\\s\\S]*?(?=\\n${day + 1}\\s+|\\n\\d+\\s+|$)`, "i");
   const m = txt.match(reBlock);
   if (!m) return [];
-  const block = m[0];
-  const cleaned = block
+  const block = m[0]
     .replace(/\b(mañana|tarde)\b/gi, "")
-    .replace(/\b(Km\/h|km\/h|Velocidad.*?\n)/gi, "")
+    .replace(/\b(km\/h|velocidad.*?\n)\b/gi, "")
     .replace(/[0-9]{1,3}\s*$/gm, "")
-    .replace(/[0-9]+/g, "")
+    .replace(/[0-9]+/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  const lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  const lines = block.split(/\n+/).map(s => s.trim()).filter(Boolean);
   if (lines.length && /^\d+\b/.test(lines[0])) lines.shift();
-  const asWords = lines.join("\n").split(/\n/).map(s => s.trim()).filter(Boolean);
 
   const vias = [];
-  for (const s of asWords) {
-    const v = s.replace(/\s{2,}/g, " ").replace(/^\W+|\W+$/g, "");
-    if (!v) continue;
-    if (!vias.includes(v)) vias.push(v);
+  for (const s of lines) {
+    const v = s.replace(/^\W+|\W+$/g, "");
+    if (v && !vias.includes(v)) vias.push(v);
   }
   return vias;
 }
 
 async function overpassWaysForName(name) {
-  const bbox = "42.56,-5.62,42.65,-5.50"; // León aprox (S,W,N,E)
+  const bbox = "42.56,-5.62,42.65,-5.50"; // S,W,N,E León capital aprox
   const query = `
 [out:json][timeout:25];
 (
@@ -84,7 +90,7 @@ async function main() {
   await fs.mkdir(path.dirname(OUT), { recursive: true });
 
   const pdfBytes = await downloadFirstWorking(PDF_CANDIDATES);
-  const { text } = await pdfParse(pdfBytes);
+  const text = await pdfToText(pdfBytes);
   const streets = parseStreetsForDay(text, day);
 
   const features = [];
@@ -98,7 +104,7 @@ async function main() {
         ? { type: "LineString", coordinates: mls[0] }
         : { type: "MultiLineString", coordinates: mls }
     });
-    await new Promise(r => setTimeout(r, 600)); // cortesía Overpass
+    await new Promise(r => setTimeout(r, 600));
   }
 
   const fc = { type: "FeatureCollection", features };
@@ -106,10 +112,9 @@ async function main() {
   console.log(`Generado ${OUT} con ${features.length} calles`);
 }
 
-main().catch(async (e) => {
+main().catch(async e => {
   console.error(e);
   const fc = { type: "FeatureCollection", features: [] };
   await fs.mkdir(path.dirname(OUT), { recursive: true });
   await fs.writeFile(OUT, JSON.stringify(fc), "utf8");
-  process.exit(0); // no falla el workflow
 });
