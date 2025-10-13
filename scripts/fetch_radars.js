@@ -26,7 +26,6 @@ function hoyES() {
   };
 }
 
-
 // --- 1) CRAWLER: busca PDFs de "Radares" en noticias recientes ---
 const NEWS_PAGES = [
   "https://www.aytoleon.es/es/actualidad/noticias",
