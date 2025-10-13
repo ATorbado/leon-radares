@@ -153,73 +153,73 @@ function parseStreetsForDay(txt, day) {
 
 // ---------- 4) Overpass: buscar la vía (con variantes) ----------
 async function overpassWaysForName(name) {
-  // 1) Normaliza: quita puntos, duplica espacios, expande Avda.
-  const base = name
-    .replace(/\./g, " ")
-    .replace(/\b(avda?\.?|av)\b/gi, "Avenida")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  const BBOX = "42.56,-5.62,42.65,-5.50";
 
-  // 2) Construye variantes con prefijos frecuentes
-  const variants = new Set([
+  // Normaliza y genera variantes: con/ sin “Calle/ Avenida/ Paseo/ Plaza” y artículos
+  const base = name.replace(/\./g, " ").replace(/\s{2,}/g, " ").trim();
+  const cores = new Set([
     base,
-    /^calle\s/i.test(base) ? base : "Calle " + base,
-    /^avenida\s/i.test(base) ? base : "Avenida " + base,
-    /^paseo\s/i.test(base) ? base : "Paseo " + base,
-    /^plaza\s/i.test(base) ? base : "Plaza " + base,
-    /^glorieta\s/i.test(base) ? base : "Glorieta " + base,
+    base.replace(/\bAvenida\b/i, "").trim(),
+    base.replace(/\bCalle\b/i, "").trim(),
   ]);
 
-  // 3) Utilidad: crear regex tolerante (case-insensitive, espacios flexibles, acentos opcionales)
-  const accentClass = (c) => {
-    const map = { a: "[aáà]", e: "[eéè]", i: "[iíì]", o: "[oóò]", u: "[uúùü]" };
-    const lower = c.toLowerCase();
-    return map[lower] ? map[lower] : c.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
-  };
-  const toRegex = (s) => {
-    // Palabras → .* entre ellas (permite abreviaturas tipo "José M Suárez")
-    const tokens = s.split(/\s+/).filter(Boolean);
-    const pattern = tokens.map(t => t.split("").map(accentClass).join("")).join(".*");
-    return `(?i)^.*${pattern}.*$`;
-  };
+  const heads = ["", "Calle ", "Avenida ", "Paseo ", "Plaza ", "Glorieta "];
+  const articles = ["", "de ", "del ", "de la ", "de los ", "de las "];
 
-  // 4) Prueba primero coincidencia exacta; luego regex amplio
-  const BBOX = "42.56,-5.62,42.65,-5.50";
-  const tryQuery = async (filter) => {
+  const variants = new Set();
+  for (const c of cores) {
+    for (const h of heads) for (const a of articles)
+      variants.add((h + a + c).replace(/\s{2,}/g, " ").trim());
+  }
+  // Casos típicos del PDF
+  variants.add("Avenida de los Peregrinos");
+  variants.add("Calle La Corredera");
+
+  const esc = s => s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const accent = c => ({a:"[aáà]",e:"[eéè]",i:"[iíì]",o:"[oóò]",u:"[uúùü]"}[c.toLowerCase()] || esc(c));
+  const toRegex = s => s.split(/\s+/).map(t => t.split("").map(accent).join("")).join(".*");
+
+  // 1) exactas
+  for (const v of variants) {
     const q = `
 [out:json][timeout:25];
-way["name"${filter}](${BBOX});
+way["name"="${v}"](${BBOX});
 out geom;`;
     const r = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
       body: "data=" + encodeURIComponent(q)
     });
-    if (!r.ok) return [];
+    if (!r.ok) continue;
     const j = await r.json();
-    const lines = [];
-    for (const e of j.elements || []) {
-      if (e.type === "way" && Array.isArray(e.geometry)) {
-        lines.push(e.geometry.map(p => [p.lon, p.lat]));
-      }
-    }
-    return lines;
-  };
-
-  // 4a) exactas
-  for (const v of variants) {
-    const lines = await tryQuery(`="${v}"`);
+    const lines = (j.elements || [])
+      .filter(e => e.type === "way" && Array.isArray(e.geometry))
+      .map(e => e.geometry.map(p => [p.lon, p.lat]));
     if (lines.length) return lines;
   }
-  // 4b) regex tolerante
+
+  // 2) regex tolerante (flag ,i para case-insensitive)
   for (const v of variants) {
     const rx = toRegex(v);
-    const lines = await tryQuery(`~"${rx}"`);
+    const q = `
+[out:json][timeout:25];
+way["name"~"${rx}",i](${BBOX});
+out geom;`;
+    const r = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: "data=" + encodeURIComponent(q)
+    });
+    if (!r.ok) continue;
+    const j = await r.json();
+    const lines = (j.elements || [])
+      .filter(e => e.type === "way" && Array.isArray(e.geometry))
+      .map(e => e.geometry.map(p => [p.lon, p.lat]));
     if (lines.length) return lines;
   }
+
   return [];
 }
-
 
 // ---------- 5) Main ----------
 async function main() {
