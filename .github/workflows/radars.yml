@@ -2,7 +2,9 @@ name: Radares León (diario)
 
 on:
   schedule:
-    - cron: "7 0 * * *"   # 00:07 Europe/Madrid aprox (Actions usa UTC)
+    - cron: "5 22 * * *"   # 00:05 Europe/Madrid cuando es UTC+2 (verano)
+    - cron: "5 23 * * *"   # 00:05 Europe/Madrid cuando es UTC+1 (invierno)
+    - cron: "15 23 * * *"  # Reintento de seguridad ~01:15 Madrid
   workflow_dispatch:
 
 permissions:
@@ -15,16 +17,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      # Instalación limpia (sin lockfile)
       - name: Clean install
         run: |
           rm -rf node_modules package-lock.json
           npm i --prefer-online --no-audit --no-fund
+
       - name: Sanity check (no pdf-parse)
         run: node -e "console.log('Has pdf-parse?', require('fs').existsSync('node_modules/pdf-parse'))"
-      - run: npm run run
+
+      - name: Generar GeoJSON de hoy
+        run: npm run run
+
       - name: Commit GeoJSON
         run: |
           git config user.name "github-actions[bot]"
@@ -32,10 +41,12 @@ jobs:
           git add radars/today.geojson
           git commit -m "update radars today" || echo "no changes"
           git push
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: .
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
