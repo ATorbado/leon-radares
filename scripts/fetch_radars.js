@@ -1,8 +1,4 @@
 // scripts/fetch_radars.js
-// Genera radars/today.geojson con las calles de León que tienen radar móvil hoy
-// Fuente: PDF mensual del Ayuntamiento de León. Busca automáticamente el PDF
-// del mes actual o de los últimos 12 meses con varias variantes de nombre.
-
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetch } from "undici";
@@ -10,83 +6,119 @@ import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const OUT = path.join(process.cwd(), "radars", "today.geojson");
 const TZ = "Europe/Madrid";
-
-// León capital aproximado: S, W, N, E
 const BBOX_LEON = "42.56,-5.62,42.65,-5.50";
-
-const MESES = [
-  "enero","febrero","marzo","abril","mayo","junio",
-  "julio","agosto","septiembre","octubre","noviembre","diciembre"
-];
-
-// Directorios donde suelen colgar los PDFs
-const BASES = [
-  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias2/",
-  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias/"
-];
-
-// Variantes comunes del nombre del fichero
-const VARIANTES = (mes, año) => [
-  `Radares ${mes} ${año}.pdf`,
-  `radares ${mes} ${año}.pdf`,
-  `Radares móviles ${mes} ${año}.pdf`,
-  `Radares movilidad ${mes} ${año}.pdf`,
-  `Radares_${mes}_${año}.pdf`,
-  `Radares ${mes}-${año}.pdf`
-];
+const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
 function hoyES() {
   const d = new Date(new Date().toLocaleString("en-GB", { timeZone: TZ }));
-  return { d, day: d.getDate(), month: d.getMonth() + 1, year: d.getFullYear() };
+  return { d, day: d.getDate(), month: d.getMonth()+1, year: d.getFullYear() };
 }
 
-function mesesAtras(n) {
-  const { d } = hoyES();
-  const arr = [];
-  for (let i = 0; i < n; i++) {
-    const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth() - i, 1));
-    const mes = MESES[dt.getUTCMonth()];
-    const año = dt.getUTCFullYear();
-    arr.push({ mes, año });
+// --- 1) CRAWLER: busca PDFs de "Radares" en noticias recientes ---
+const NEWS_PAGES = [
+  "https://www.aytoleon.es/es/actualidad/noticias",
+  // Páginas de listados típicos
+  "https://www.aytoleon.es/es/actualidad/noticias/Paginas/default.aspx",
+];
+const HREF_RE = /href\s*=\s*"(.*?)"/gi;
+
+async function listCandidateNewsPages() {
+  // Intenta paginaciones simple: ?page=2..6 y /Paginas/default.aspx?Paged=TRUE
+  const urls = new Set(NEWS_PAGES);
+  for (let i = 2; i <= 8; i++) {
+    urls.add(`https://www.aytoleon.es/es/actualidad/noticias?page=${i}`);
   }
-  return arr;
+  // Algunas noticias modernas usan ruta /es/actualidad/noticias/articulos/<slug>
+  return [...urls];
 }
 
-async function tryUrl(u) {
+function abs(base, href) {
   try {
-    // HEAD a veces bloqueado; prueba GET con Range para no descargar entero
-    let r = await fetch(u, { method: "HEAD" });
-    if (r.ok) return u;
-    r = await fetch(u, { method: "GET", headers: { Range: "bytes=0-64" } });
-    if (r.ok) return u;
-  } catch {}
-  return null;
+    return new URL(href, base).toString();
+  } catch { return null; }
 }
 
-async function downloadPDF() {
-  const candidatos = [];
-  for (const { mes, año } of mesesAtras(12)) {
-    for (const base of BASES) {
-      for (const fn of VARIANTES(mes, año)) {
-        candidatos.push(base + encodeURIComponent(fn));
-      }
-    }
-  }
-  for (const url of candidatos) {
-    const okUrl = await tryUrl(url);
-    if (okUrl) {
-      const r = await fetch(okUrl);
-      if (r.ok) {
-        console.log("PDF usado:", okUrl);
-        return { bytes: new Uint8Array(await r.arrayBuffer()), url: okUrl };
-      }
-    }
-  }
-  throw new Error("No se pudo localizar ningún PDF de radares en los últimos 12 meses.");
+async function fetchText(u) {
+  const r = await fetch(u, { headers: { "User-Agent": "leon-radares/1.0" }});
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${u}`);
+  return await r.text();
 }
 
-async function pdfToText(uint8) {
-  const doc = await pdfjs.getDocument({ data: uint8 }).promise;
+function extractLinks(html, base) {
+  const out = [];
+  let m;
+  while ((m = HREF_RE.exec(html)) !== null) {
+    const u = abs(base, m[1]);
+    if (u) out.push(u);
+  }
+  return out;
+}
+
+function scoreByMonth(u, monthIdx, year) {
+  // Prioriza PDFs que mencionen el mes/año actual
+  const mes = MESES[monthIdx-1];
+  const s = decodeURIComponent(u).toLowerCase();
+  let score = 0;
+  if (s.includes("radares")) score += 5;
+  if (s.endsWith(".pdf")) score += 5;
+  if (s.includes(mes)) score += 3;
+  if (s.includes(String(year))) score += 2;
+  return score;
+}
+
+async function discoverRadarPDF() {
+  const { month, year } = hoyES();
+  const pages = await listCandidateNewsPages();
+
+  const pdfs = new Set();
+  for (const p of pages) {
+    try {
+      const html = await fetchText(p);
+      const links = extractLinks(html, p);
+      // Mantén solo enlaces a artículos o PDFs
+      for (const l of links) {
+        if (l.toLowerCase().endsWith(".pdf") && /radares/i.test(l)) {
+          pdfs.add(l);
+        }
+        // También entra a artículos y busca PDFs dentro
+        if (/\/articulos\//i.test(l)) pdfs.add(l);
+      }
+    } catch {}
+  }
+
+  // Abre artículos y saca PDFs internos
+  const more = [];
+  for (const l of [...pdfs]) {
+    if (!l.toLowerCase().endsWith(".pdf")) more.push(l);
+  }
+  for (const art of more.slice(0, 30)) { // limita 30 artículos
+    try {
+      const html = await fetchText(art);
+      const links = extractLinks(html, art);
+      for (const u of links) {
+        if (u.toLowerCase().endsWith(".pdf") && /radares/i.test(u)) {
+          pdfs.add(u);
+        }
+      }
+    } catch {}
+  }
+
+  const ranked = [...pdfs]
+    .filter(u => u.toLowerCase().endsWith(".pdf"))
+    .map(u => ({ u, s: scoreByMonth(u, month, year) }))
+    .sort((a,b) => b.s - a.s);
+
+  if (ranked.length === 0) throw new Error("No se localizaron PDFs de radares en noticias.");
+  const best = ranked[0].u;
+  return best;
+}
+
+// --- 2) PDF → texto ---
+async function pdfToTextFromUrl(url) {
+  const r = await fetch(url, { headers: { "User-Agent": "leon-radares/1.0" }});
+  if (!r.ok) throw new Error(`HTTP ${r.status} PDF`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const doc = await pdfjs.getDocument({ data: bytes }).promise;
   let text = "";
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
@@ -96,6 +128,7 @@ async function pdfToText(uint8) {
   return text;
 }
 
+// --- 3) Parseo del día ---
 function norm(s) {
   return s
     .replace(/\b(avda?\.?|av\.)\b/gi, "Avenida")
@@ -104,8 +137,8 @@ function norm(s) {
     .trim();
 }
 
-// Extrae las vías del bloque del día indicado
 function parseStreetsForDay(txt, day) {
+  // Busca una tabla por día; tolera columnas
   const reBlock = new RegExp(`\\n\\s*${day}\\s+[\\s\\S]*?(?=\\n\\s*${day + 1}\\s+|\\n\\s*\\d+\\s+|$)`, "i");
   const m = txt.match(reBlock);
   if (!m) return [];
@@ -128,6 +161,7 @@ function parseStreetsForDay(txt, day) {
   return vias;
 }
 
+// --- 4) Overpass para cada vía ---
 async function overpassWaysForName(name) {
   const query = `
 [out:json][timeout:25];
@@ -151,14 +185,16 @@ out geom;`;
   return lines;
 }
 
+// --- 5) Main ---
 async function main() {
   const { day } = hoyES();
   await fs.mkdir(path.dirname(OUT), { recursive: true });
 
-  const { bytes } = await downloadPDF();
-  const text = await pdfToText(bytes);
-  const streets = parseStreetsForDay(text, day);
+  const pdfUrl = await discoverRadarPDF();
+  console.log("PDF usado:", pdfUrl);
 
+  const text = await pdfToTextFromUrl(pdfUrl);
+  const streets = parseStreetsForDay(text, day);
   console.log(`Calles detectadas para el día ${day}:`, streets);
 
   const features = [];
@@ -175,7 +211,7 @@ async function main() {
         ? { type: "LineString", coordinates: mls[0] }
         : { type: "MultiLineString", coordinates: mls }
     });
-    await new Promise(r => setTimeout(r, 600)); // cortesía Overpass
+    await new Promise(r => setTimeout(r, 600));
   }
 
   const fc = { type: "FeatureCollection", features };
