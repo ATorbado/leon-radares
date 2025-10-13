@@ -10,9 +10,22 @@ const BBOX_LEON = "42.56,-5.62,42.65,-5.50";
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
 function hoyES() {
-  const d = new Date(new Date().toLocaleString("en-GB", { timeZone: TZ }));
-  return { d, day: d.getDate(), month: d.getMonth()+1, year: d.getFullYear() };
+  const f = new Intl.DateTimeFormat("es-ES", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  });
+  const parts = Object.fromEntries(
+    f.formatToParts(new Date()).map(p => [p.type, p.value])
+  );
+  return {
+    day: Number(parts.day),
+    month: Number(parts.month),
+    year: Number(parts.year),
+  };
 }
+
 
 // --- 1) CRAWLER: busca PDFs de "Radares" en noticias recientes ---
 const NEWS_PAGES = [
