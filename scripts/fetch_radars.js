@@ -209,11 +209,178 @@ async function discoverRadarPDFFallback() {
 }
 
 // -------------------- Caché último PDF --------------------
-async function readCachedPDF() { try { return (await fs.readFile(LAST_PDF, "utf8")).trim(); } catch { return null; } }
+async function readCachedPDF() {
+  try { return (await fs.readFile(LAST_PDF, "utf8")).trim(); }
+  catch { return null; }
+}
 async function writeCachedPDF(url) {
   await fs.mkdir(path.dirname(LAST_PDF), { recursive: true });
   await fs.writeFile(LAST_PDF, url, "utf8");
 }
 
 // -------------------- PDF → texto --------------------
-async function pdfToTextFromUrl(url
+async function pdfToTextFromUrl(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status} PDF`);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const doc = await pdfjs.getDocument({ data: bytes }).promise;
+  let text = "";
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const tc = await page.getTextContent();
+    text += tc.items.map(it => it.str).join("\n") + "\n";
+  }
+  return text;
+}
+
+// -------------------- Parser del día --------------------
+function parseStreetsForDay(txt, day) {
+  const reBlock = new RegExp(
+    String.raw`(^|\n)\s*${day}\s+(mañana|tarde)[\s\S]*?(?=(^|\n)\s*(?:[1-9]|[12]\d|3[01])\s+(mañana|tarde)|$)`,
+    "i"
+  );
+  const m = txt.match(reBlock);
+  if (!m) return [];
+  const cleaned = m[0]
+    .replace(/\bGABINETE DE COMUNICACIÓN\b/gi, " ")
+    .replace(/\b(mañana|tarde)\b/gi, " ")
+    .replace(/km\/h|velocidad.*?(\n|$)/gim, " ")
+    .replace(/(\s|^)(20|30|40|50|60|70|80|90|100)(\s|$)/g, " ")
+    .replace(/[0-9]{1,3}\s*$/gm, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+
+  const lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  const norm = s => s
+    .replace(/\./g, " ")
+    .replace(/\b(avda?\.?|av\.)\b/gi, "Avenida")
+    .replace(/\b(c\/|c\.\s?|calle)\b/gi, "Calle")
+    .replace(/\b(de la|de los|de las|de|del)\b/gi, m => m.toLowerCase())
+    .replace(/^\W+|\W+$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  const vias = [];
+  for (const raw of lines) {
+    if (/^(?:día|turno|\W*)$/i.test(raw)) continue;
+    const v = norm(raw);
+    if (v && !vias.includes(v)) vias.push(v);
+  }
+  return vias;
+}
+
+// -------------------- Overpass tolerante --------------------
+async function overpassWaysForName(name) {
+  const base = name.replace(/\./g, " ").replace(/\s{2,}/g, " ").trim();
+  const cores = new Set([
+    base,
+    base.replace(/\bAvenida\b/i, "").trim(),
+    base.replace(/\bCalle\b/i, "").trim(),
+  ]);
+  const heads = ["", "Calle ", "Avenida ", "Paseo ", "Plaza ", "Glorieta "];
+  const articles = ["", "de ", "del ", "de la ", "de los ", "de las "];
+
+  const variants = new Set();
+  for (const c of cores) for (const h of heads) for (const a of articles)
+    variants.add((h + a + c).replace(/\s{2,}/g, " ").trim());
+
+  // Alias habituales
+  variants.add("Avenida de los Peregrinos");
+  variants.add("Calle La Corredera");
+
+  const esc = s => s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const accent = c => ({a:"[aáà]",e:"[eéè]",i:"[iíì]",o:"[oóò]",u:"[uúùü]"}[c.toLowerCase()] || esc(c));
+  const toRegex = s => s.split(/\s+/).map(t => t.split("").map(accent).join("")).join(".*");
+
+  const tryQuery = async (filter) => {
+    const q = `
+[out:json][timeout:25];
+way["name"${filter}](${BBOX_LEON});
+out geom;`;
+    const r = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+      body: "data=" + encodeURIComponent(q)
+    });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return (j.elements || [])
+      .filter(e => e.type === "way" && Array.isArray(e.geometry))
+      .map(e => e.geometry.map(p => [p.lon, p.lat]));
+  };
+
+  // Exactas
+  for (const v of variants) {
+    const lines = await tryQuery(`="${v}"`);
+    if (lines.length) return lines;
+  }
+  // Regex con flag i
+  for (const v of variants) {
+    const rx = toRegex(v);
+    const lines = await tryQuery(`~"${rx}",i`);
+    if (lines.length) return lines;
+  }
+  return [];
+}
+
+// -------------------- Main --------------------
+async function main() {
+  const { day } = hoyES();
+  await fs.mkdir(path.dirname(OUT), { recursive: true });
+
+  let pdfUrl = null;
+  try {
+    pdfUrl = await discoverRadarPDFViaSharePointSearch(60);
+  } catch {
+    try {
+      pdfUrl = await discoverRadarPDFViaCrawler();
+    } catch {
+      try {
+        pdfUrl = await discoverRadarPDFFallback();
+      } catch {
+        const cached = await readCachedPDF();
+        if (cached) {
+          console.warn("SP + crawler + patrones fallaron. Usando caché:", cached);
+          pdfUrl = cached;
+        } else {
+          throw new Error("No se localizaron PDFs de radares.");
+        }
+      }
+    }
+  }
+  console.log("PDF usado:", pdfUrl);
+  await writeCachedPDF(pdfUrl);
+
+  const text = await pdfToTextFromUrl(pdfUrl);
+  const streets = parseStreetsForDay(text, day);
+  console.log(`Calles detectadas para el día ${day}:`, streets);
+
+  const features = [];
+  for (const name of streets) {
+    const mls = await overpassWaysForName(name);
+    if (mls.length === 0) {
+      console.log(`No mapeada en OSM: ${name}`);
+      continue;
+    }
+    features.push({
+      type: "Feature",
+      properties: { nombre: name, fuente: "Ayto León" },
+      geometry: mls.length === 1
+        ? { type: "LineString", coordinates: mls[0] }
+        : { type: "MultiLineString", coordinates: mls }
+    });
+    await new Promise(r => setTimeout(r, 600)); // cortesía Overpass
+  }
+
+  const fc = { type: "FeatureCollection", features };
+  await fs.writeFile(OUT, JSON.stringify(fc, null, 2), "utf8");
+  console.log(`Generado ${OUT} con ${features.length} calles`);
+}
+
+main().catch(async e => {
+  console.error("ERROR:", e.message);
+  const fc = { type: "FeatureCollection", features: [] };
+  await fs.mkdir(path.dirname(OUT), { recursive: true });
+  await fs.writeFile(OUT, JSON.stringify(fc, null, 2), "utf8");
+});
