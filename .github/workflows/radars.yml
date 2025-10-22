@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: "5 22 * * *"   # 00:05 Europe/Madrid cuando es UTC+2 (verano)
     - cron: "5 23 * * *"   # 00:05 Europe/Madrid cuando es UTC+1 (invierno)
-    - cron: "15 23 * * *"  # Reintento de seguridad ~01:15 Madrid
+    - cron: "15 23 * * *"  # Reintento ~01:15 Madrid
   workflow_dispatch:
 
 permissions:
@@ -31,16 +31,34 @@ jobs:
       - name: Sanity check (no pdf-parse)
         run: node -e "console.log('Has pdf-parse?', require('fs').existsSync('node_modules/pdf-parse'))"
 
-      - name: Generar GeoJSON de hoy
-        run: npm run run
-
-      - name: Commit GeoJSON
+      - name: Lista de archivos
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add radars/today.geojson
-          git commit -m "update radars today" || echo "no changes"
-          git push
+          ls -la
+          ls -la scripts || true
+          ls -la radars || true
+
+      - name: Generar GeoJSON de hoy (verbose)
+        run: |
+          node -v
+          npm -v
+          node --trace-warnings scripts/fetch_radars.js
+          echo "--- stat today.geojson ---"
+          node -e "console.log(require('fs').statSync('radars/today.geojson'))"
+          echo "--- head today.geojson ---"
+          head -n 60 radars/today.geojson || true
+
+      - name: Commit GeoJSON (si cambió)
+        run: |
+          git status --porcelain
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add radars/today.geojson radars/latest_pdf.txt || true
+            git commit -m "update radars today"
+            git push
+          else
+            echo "Sin cambios que commitear"
+          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
