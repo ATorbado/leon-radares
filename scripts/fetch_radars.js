@@ -247,13 +247,20 @@ async function pdfToTextFromUrl(url) {
 
 // -------------------- Parser del día --------------------
 function parseStreetsForDay(txt, day) {
-  const reBlock = new RegExp(
-    String.raw`(^|\n)\s*${day}\s+(mañana|tarde)[\s\S]*?(?=(^|\n)\s*(?:[1-9]|[12]\d|3[01])\s+(mañana|tarde)|$)`,
-    "i"
-  );
-  const m = txt.match(reBlock);
-  if (!m) return [];
-  const cleaned = m[0]
+  // Patrones de inicio/fin
+  const dayStart = String.raw`(^|\n)\s*${day}\s+`;
+  const nextDay  = String.raw`(?=(^|\n)\s*(?:[1-9]|[12]\d|3[01])\s+(mañana|tarde)|$)`;
+
+  // Captura explícita de mañana -> hasta "tarde" o siguiente día
+  const reManana = new RegExp(`${dayStart}mañana[\\s\\S]*?(?=(^|\\n)\\s*tarde\\b|${nextDay})`, "i");
+  // Captura explícita de tarde -> desde "tarde" hasta siguiente día
+  const reTarde  = new RegExp(`${dayStart}(?:mañana[\\s\\S]*?\\n\\s*)?tarde[\\s\\S]*?${nextDay}`, "i");
+
+  const bloques = [];
+  const m1 = txt.match(reManana); if (m1) bloques.push(m1[0]);
+  const m2 = txt.match(reTarde);  if (m2) bloques.push(m2[0]);
+
+  const normalizar = (s) => s
     .replace(/\bGABINETE DE COMUNICACIÓN\b/gi, " ")
     .replace(/\b(mañana|tarde)\b/gi, " ")
     .replace(/km\/h|velocidad.*?(\n|$)/gim, " ")
@@ -263,23 +270,26 @@ function parseStreetsForDay(txt, day) {
     .replace(/\n{2,}/g, "\n")
     .trim();
 
-  const lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
-  const norm = s => s
+  const normVia = (s) => s
     .replace(/\./g, " ")
     .replace(/\b(avda?\.?|av\.)\b/gi, "Avenida")
     .replace(/\b(c\/|c\.\s?|calle)\b/gi, "Calle")
-    .replace(/\b(de la|de los|de las|de|del)\b/gi, m => m.toLowerCase())
+    .replace(/\b(de la|de los|de las|de|del)\b/gi, (m)=>m.toLowerCase())
     .replace(/^\W+|\W+$/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  const vias = [];
-  for (const raw of lines) {
-    if (/^(?:día|turno|\W*)$/i.test(raw)) continue;
-    const v = norm(raw);
-    if (v && !vias.includes(v)) vias.push(v);
+  const vias = new Set();
+  for (const b of bloques) {
+    const cleaned = normalizar(b);
+    const lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
+    for (const raw of lines) {
+      if (/^(?:día|turno|\W*)$/i.test(raw)) continue;
+      const v = normVia(raw);
+      if (v) vias.add(v);
+    }
   }
-  return vias;
+  return [...vias];
 }
 
 // -------------------- Overpass tolerante --------------------
