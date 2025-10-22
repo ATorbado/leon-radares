@@ -30,6 +30,32 @@ async function fetch(url, opts = {}, retries = 3) {
   throw new Error(`HTTP fail: ${url}`);
 }
 
+// -------------------- Mirrors y helper para Overpass --------------------
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://z.overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+
+async function overpassRequest(q, triesPerHost = 2) {
+  const body = "data=" + encodeURIComponent(q);
+  const headers = { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" };
+  for (const ep of OVERPASS_ENDPOINTS) {
+    for (let i = 0; i < triesPerHost; i++) {
+      try {
+        const r = await fetch(ep, { method: "POST", headers, body });
+        if (r.ok) {
+          // Algunos mirrors devuelven HTML de error; intenta parsear JSON
+          const txt = await r.text();
+          try { return JSON.parse(txt); } catch { /* cae a retry */ }
+        }
+      } catch {}
+      await new Promise(r => setTimeout(r, 800 + i * 600));
+    }
+  }
+  throw new Error("Overpass no disponible en los mirrors.");
+}
+
 // -------------------- Fecha local ES --------------------
 function hoyES() {
   const f = new Intl.DateTimeFormat("es-ES", {
@@ -43,15 +69,13 @@ function hoyES() {
 
 // -------------------- Búsqueda SharePoint --------------------
 async function discoverRadarPDFViaSharePointSearchStrict() {
-  // URL EXACTA que me diste (filtrada por últimos ~30 días y palabra 'radar')
+  // URL EXACTA con filtro de ~últimos 30 días y palabra 'radar'
   const searchUrl = "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx?k=radar#Default=%7B%22k%22%3A%22radar%22%2C%22r%22%3A%5B%7B%22n%22%3A%22LastModifiedTime%22%2C%22t%22%3A%5B%22range(2025-09-21T22%3A00%3A00Z%2C%20max%2C%20to%3D%5C%22le%5C%22)%22%5D%2C%22o%22%3A%22and%22%2C%22k%22%3Afalse%2C%22m%22%3Anull%7D%5D%2C%22l%22%3A3082%7D";
   const base = "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx";
 
   const { month, year } = hoyES();
-  const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  const mesNombre = MESES[month - 1]; // ej. "octubre"
+  const mesNombre = MESES[month - 1];
 
-  // Descarga HTML y extrae enlaces
   const html = await (await fetch(searchUrl)).text();
   const LINK_RE = /(href|data-href|data-src)\s*=\s*(['"])(.*?)\2/gi;
   const abs = (h) => { try { return new URL(h, base).toString(); } catch { return null; } };
@@ -60,13 +84,10 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
   let m;
   while ((m = LINK_RE.exec(html)) !== null) {
     const u = abs(m[3]);
-    if (!u) continue;
-    // Solo PDFs que claramente sean de "Radares"
-    if (u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)) pdfs.add(u);
+    if (u && u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)) pdfs.add(u);
   }
   if (!pdfs.size) throw new Error("SP strict: no hay PDFs en el rango dado.");
 
-  // 1) Filtro duro: nombre contenga mes y año actuales (con o sin acentos).
   const norm = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const mesNorm = norm(mesNombre);
   const yearStr = String(year);
@@ -77,7 +98,6 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
   });
 
   if (exactos.length > 0) {
-    // Si hay varios, elige el más reciente por Last-Modified (si existe)
     const scored = [];
     for (const u of exactos) {
       let lm = 0;
@@ -92,10 +112,9 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
     return scored[0].u;
   }
 
-  // 2) Si no hay exacto, rechaza explícitamente años distintos al actual
+  // Si no hay coincidencia exacta, coge el más reciente del año actual.
   const soloAnioActual = [...pdfs].filter(u => norm(decodeURIComponent(u)).includes(yearStr));
   if (soloAnioActual.length > 0) {
-    // Coge el más reciente por Last-Modified
     const scored = [];
     for (const u of soloAnioActual) {
       let lm = 0;
@@ -320,13 +339,7 @@ async function overpassWaysForName(name) {
 [out:json][timeout:25];
 way["name"${filter}](${BBOX_LEON});
 out geom;`;
-    const r = await fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-      body: "data=" + encodeURIComponent(q)
-    });
-    if (!r.ok) return [];
-    const j = await r.json();
+    const j = await overpassRequest(q); // ← usa mirrors + reintentos
     return (j.elements || [])
       .filter(e => e.type === "way" && Array.isArray(e.geometry))
       .map(e => e.geometry.map(p => [p.lon, p.lat]));
@@ -353,9 +366,8 @@ async function main() {
 
   let pdfUrl = null;
   try {
-    pdfUrl = await discoverRadarPDFViaSharePointSearchStrict(); // << estricta con tu filtro
+    pdfUrl = await discoverRadarPDFViaSharePointSearchStrict(); // filtro estricto
   } catch (e1) {
-    // (Opcional) mantén fallbacks si quieres resiliencia:
     try {
       pdfUrl = await discoverRadarPDFViaCrawler();
     } catch {
@@ -375,7 +387,6 @@ async function main() {
   console.log("PDF usado:", pdfUrl);
   await writeCachedPDF(pdfUrl);
 
-
   const text = await pdfToTextFromUrl(pdfUrl);
   const streets = parseStreetsForDay(text, day);
   console.log(`Calles detectadas para el día ${day}:`, streets);
@@ -394,7 +405,7 @@ async function main() {
         ? { type: "LineString", coordinates: mls[0] }
         : { type: "MultiLineString", coordinates: mls }
     });
-    await new Promise(r => setTimeout(r, 600)); // cortesía Overpass
+    await new Promise(r => setTimeout(r, 1000)); // cortesía Overpass
   }
 
   const fc = { type: "FeatureCollection", features };
@@ -406,5 +417,5 @@ main().catch(async e => {
   console.error("ERROR:", e.message);
   const fc = { type: "FeatureCollection", features: [] };
   await fs.mkdir(path.dirname(OUT), { recursive: true });
-  await fs.writeFile(OUT, JSON.stringify(fc, null, 2), "utf8");
+  await fs.writeFile(OUT, JSON.stringify(fc), "utf8");
 });
