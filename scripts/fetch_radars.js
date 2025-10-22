@@ -42,63 +42,75 @@ function hoyES() {
 }
 
 // -------------------- Búsqueda SharePoint --------------------
-async function discoverRadarPDFViaSharePointSearch(daysBack = 60) {
-  const now = new Date();
-  const from = new Date(now.getTime() - daysBack*24*60*60*1000);
-  const fromIso = from.toISOString().replace(/\.\d{3}Z$/, "Z");
-  const filter = {
-    k: "radar",
-    r: [{ n: "LastModifiedTime", t: [`range(${fromIso}, max, to="le")`], o: "and", k: false, m: null }],
-    l: 3082
-  };
+async function discoverRadarPDFViaSharePointSearchStrict() {
+  // URL EXACTA que me diste (filtrada por últimos ~30 días y palabra 'radar')
+  const searchUrl = "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx?k=radar#Default=%7B%22k%22%3A%22radar%22%2C%22r%22%3A%5B%7B%22n%22%3A%22LastModifiedTime%22%2C%22t%22%3A%5B%22range(2025-09-21T22%3A00%3A00Z%2C%20max%2C%20to%3D%5C%22le%5C%22)%22%5D%2C%22o%22%3A%22and%22%2C%22k%22%3Afalse%2C%22m%22%3Anull%7D%5D%2C%22l%22%3A3082%7D";
   const base = "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx";
-  const url = `${base}?k=radar#Default=${encodeURIComponent(JSON.stringify(filter))}`;
 
-  const html = await (await fetch(url)).text();
+  const { month, year } = hoyES();
+  const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const mesNombre = MESES[month - 1]; // ej. "octubre"
+
+  // Descarga HTML y extrae enlaces
+  const html = await (await fetch(searchUrl)).text();
   const LINK_RE = /(href|data-href|data-src)\s*=\s*(['"])(.*?)\2/gi;
   const abs = (h) => { try { return new URL(h, base).toString(); } catch { return null; } };
 
-  const cand = new Set();
+  const pdfs = new Set();
   let m;
   while ((m = LINK_RE.exec(html)) !== null) {
     const u = abs(m[3]);
     if (!u) continue;
-    if (u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)) cand.add(u);
-    if (/\/articulos\//i.test(u)) cand.add(u);
+    // Solo PDFs que claramente sean de "Radares"
+    if (u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)) pdfs.add(u);
+  }
+  if (!pdfs.size) throw new Error("SP strict: no hay PDFs en el rango dado.");
+
+  // 1) Filtro duro: nombre contenga mes y año actuales (con o sin acentos).
+  const norm = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const mesNorm = norm(mesNombre);
+  const yearStr = String(year);
+
+  const exactos = [...pdfs].filter(u => {
+    const s = norm(decodeURIComponent(u));
+    return s.includes(mesNorm) && s.includes(yearStr);
+  });
+
+  if (exactos.length > 0) {
+    // Si hay varios, elige el más reciente por Last-Modified (si existe)
+    const scored = [];
+    for (const u of exactos) {
+      let lm = 0;
+      try {
+        const head = await fetch(u, { method: "HEAD" });
+        const lmStr = head.headers.get("last-modified");
+        if (lmStr) lm = Date.parse(lmStr) || 0;
+      } catch {}
+      scored.push({ u, lm });
+    }
+    scored.sort((a,b) => b.lm - a.lm);
+    return scored[0].u;
   }
 
-  // Abrir artículos y extraer PDFs internos
-  const arts = [...cand].filter(u => !u.toLowerCase().endsWith(".pdf")).slice(0, 40);
-  for (const a of arts) {
-    try {
-      const th = await (await fetch(a)).text();
-      let mm; LINK_RE.lastIndex = 0;
-      while ((mm = LINK_RE.exec(th)) !== null) {
-        const u = abs(mm[3]);
-        if (u && u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)) cand.add(u);
-      }
-    } catch {}
+  // 2) Si no hay exacto, rechaza explícitamente años distintos al actual
+  const soloAnioActual = [...pdfs].filter(u => norm(decodeURIComponent(u)).includes(yearStr));
+  if (soloAnioActual.length > 0) {
+    // Coge el más reciente por Last-Modified
+    const scored = [];
+    for (const u of soloAnioActual) {
+      let lm = 0;
+      try {
+        const head = await fetch(u, { method: "HEAD" });
+        const lmStr = head.headers.get("last-modified");
+        if (lmStr) lm = Date.parse(lmStr) || 0;
+      } catch {}
+      scored.push({ u, lm });
+    }
+    scored.sort((a,b) => b.lm - a.lm);
+    return scored[0].u;
   }
 
-  if (!cand.size) throw new Error("SP search: sin PDFs.");
-  const entries = [];
-  for (const u of cand) {
-    let lm = 0, score = 0;
-    try {
-      const head = await fetch(u, { method: "HEAD" });
-      const lmStr = head.headers.get("last-modified");
-      if (lmStr) lm = Date.parse(lmStr) || 0;
-    } catch {}
-    const { month, year } = hoyES();
-    const mes = MESES[month-1];
-    const s = decodeURIComponent(u).toLowerCase();
-    if (s.includes(mes)) score += 5;
-    if (s.includes(String(year))) score += 2;
-    if (s.includes("radares")) score += 2;
-    entries.push({ u, lm, score });
-  }
-  entries.sort((a,b) => (b.lm - a.lm) || (b.score - a.score));
-  return entries[0].u;
+  throw new Error("SP strict: no hay PDF del mes/año actual en resultados.");
 }
 
 // -------------------- Crawler de noticias --------------------
@@ -331,8 +343,9 @@ async function main() {
 
   let pdfUrl = null;
   try {
-    pdfUrl = await discoverRadarPDFViaSharePointSearch(60);
-  } catch {
+    pdfUrl = await discoverRadarPDFViaSharePointSearchStrict(); // << estricta con tu filtro
+  } catch (e1) {
+    // (Opcional) mantén fallbacks si quieres resiliencia:
     try {
       pdfUrl = await discoverRadarPDFViaCrawler();
     } catch {
@@ -341,16 +354,17 @@ async function main() {
       } catch {
         const cached = await readCachedPDF();
         if (cached) {
-          console.warn("SP + crawler + patrones fallaron. Usando caché:", cached);
+          console.warn("Fallo SP strict + fallbacks. Usando caché:", cached);
           pdfUrl = cached;
         } else {
-          throw new Error("No se localizaron PDFs de radares.");
+          throw e1;
         }
       }
     }
   }
   console.log("PDF usado:", pdfUrl);
   await writeCachedPDF(pdfUrl);
+
 
   const text = await pdfToTextFromUrl(pdfUrl);
   const streets = parseStreetsForDay(text, day);
