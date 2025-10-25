@@ -1,0 +1,33 @@
+name: actualizar-datos
+on:
+  schedule:
+    - cron: 0 5 * * *   # 05:00 UTC diario
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Instalar deps
+        run: pip install openpyxl
+
+      - name: Ejecutar scripts
+        run: |
+          python scripts/fetch_dgt.py || true
+          python scripts/scrape_ayto.py || true
+
+      - name: Commit automático
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: Actualiza radares fijos y calles cortadas
+          file_pattern: radars/*.geojson closures/*.geojson
