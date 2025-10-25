@@ -1,7 +1,9 @@
 name: actualizar-datos
 on:
   schedule:
-    - cron: 0 5 * * *   # 05:00 UTC diario
+    - cron: "5 22 * * *"   # 00:05 Europe/Madrid cuando es UTC+2 (verano)
+    - cron: "5 23 * * *"   # 00:05 Europe/Madrid cuando es UTC+1 (invierno)
+    - cron: "15 23 * * *"  # Reintento ~01:15 Madrid
   workflow_dispatch:
 
 permissions:
