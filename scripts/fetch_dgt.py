@@ -1,30 +1,36 @@
-# scripts/fetch_dgt.py
-import csv, json, io, zipfile, urllib.request, datetime
+import csv, json, io, urllib.request, datetime
 from pathlib import Path
+from openpyxl import load_workbook  # XLSX oficial DGT
 
-DGT_URL = "https://www.dgt.es/conoce-el-estado-del-trafico/vigilancia-y-control/equipos-y-tramos-de-vigilancia/"  # página índice
-PROVINCIA = "LEÓN"  # mayúsculas como en el fichero de DGT
+PROVINCIA = "LEÓN"
+DGT_XLSX_URL = "https://www.dgt.es/export/sites/web-DGT/.galleries/downloads/conoce-el-estado-del-trafico/informacion-e-incidencias-de-trafico/JO_INFORME_CINEMOMETROS_WEB_DGT.XLSX"
 
-def descargar_csv_dgt():
-    # Nota: en la página hay enlace directo al fichero “Puntos y tramos de control de velocidad”.
-    # Aquí asumimos un CSV/ZIP; si fuera XLSX, se parsea con openpyxl.
-    # Deja este stub; en el Action usaremos el enlace directo actualizado.
-    raise NotImplementedError("Rellena con la URL directa al CSV/XLSX del apartado Puntos y tramos de control de velocidad")
+def leer_xlsx(url):
+    data = urllib.request.urlopen(url, timeout=60).read()
+    wb = load_workbook(io.BytesIO(data), data_only=True)
+    sh = wb.active
+    headers = [str(c.value).strip() if c.value is not None else "" for c in next(sh.iter_rows(min_row=1, max_row=1))]
+    rows = []
+    for r in sh.iter_rows(min_row=2):
+        row = {headers[i]: ("" if r[i].value is None else str(r[i].value)) for i in range(len(headers))}
+        rows.append(row)
+    return rows
 
 def filtrar_y_geojson(rows):
     feats=[]
     for r in rows:
-        # adapta a nombres reales de columnas: Provincia, Tipo, Latitud, Longitud, Vía, PK, Sentido, Velocidad
-        if r.get("Provincia","").strip().upper()!="LEÓN": 
+        if r.get("Provincia","").strip().upper()!=PROVINCIA: 
             continue
-        if r.get("Tipo","").strip().upper() not in ("FIJO","TRAMO FIJO"):
+        tipo = r.get("Tipo","").strip().upper()
+        if "FIJO" not in tipo: 
             continue
         try:
-            lat=float(r["Latitud"].replace(",",".")); lon=float(r["Longitud"].replace(",","."))
+            lat = float(str(r.get("Latitud","")).replace(",","."))
+            lon = float(str(r.get("Longitud","")).replace(",","."))
         except:
             continue
-        props={
-            "id": r.get("ID") or f'{r.get("Vía","")}-{r.get("PK","")}-{r.get("Sentido","")}',
+        props = {
+            "id": r.get("ID",""),
             "source":"DGT",
             "via": r.get("Vía",""),
             "pk_km": r.get("PK",""),
@@ -36,8 +42,10 @@ def filtrar_y_geojson(rows):
     return {"type":"FeatureCollection","features":feats}
 
 def main():
-    # Sustituye por lectura real del CSV/XLSX
-    pass
+    rows = leer_xlsx(DGT_XLSX_URL)
+    gj = filtrar_y_geojson(rows)
+    Path("radars").mkdir(exist_ok=True)
+    Path("radars/radares_fijos.geojson").write_text(json.dumps(gj, ensure_ascii=False))
 
 if __name__=="__main__":
     main()
