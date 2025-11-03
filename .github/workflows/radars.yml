@@ -2,8 +2,8 @@ name: Radares León (diario)
 
 on:
   schedule:
-    - cron: "10 22 * * *"   # 00:05 Europe/Madrid cuando es UTC+2 (verano)
-    - cron: "10 23 * * *"   # 00:05 Europe/Madrid cuando es UTC+1 (invierno)
+    - cron: "10 22 * * *"   # 00:10 Europe/Madrid cuando es UTC+2 (verano)
+    - cron: "10 23 * * *"   # 00:10 Europe/Madrid cuando es UTC+1 (invierno)
     - cron: "15 23 * * *"  # Reintento ~01:15 Madrid
   workflow_dispatch:
 
