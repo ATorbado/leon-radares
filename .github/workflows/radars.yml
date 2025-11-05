@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: "15 22 * * *"   # 00:10 Europe/Madrid cuando es UTC+2 (verano)
     - cron: "15 23 * * *"   # 00:10 Europe/Madrid cuando es UTC+1 (invierno)
-    - cron: "15 23 * * *"  # Reintento ~01:15 Madrid
+    - cron: "25 23 * * *"  # Reintento ~01:15 Madrid
   workflow_dispatch:
 
 concurrency:
