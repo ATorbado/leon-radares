@@ -1,13 +1,13 @@
 {
-  "name": "leon-radares",
+  "name": "leon-radares-scripts",
+  "version": "1.0.0",
   "type": "module",
-  "scripts": { "run": "node scripts/fetch_radars.js" },
+  "scripts": {
+    "build:feeds": "node scripts/build_feeds.js"
+  },
   "dependencies": {
-    "undici": "6.19.8",
-    "pdfjs-dist": "4.6.82"
-    
+    "fast-xml-parser": "4.6.82",
     "luxon": "^3.5.0",
-    "node-fetch": "^3.3.2",
-    "fast-xml-parser": "^4.5.0"
+    "node-fetch": "^3.3.2"
   }
 }
