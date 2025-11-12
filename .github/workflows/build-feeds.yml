@@ -1,0 +1,37 @@
+name: Build monthly feeds
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Cada día a las 06:10 hora de Madrid (por si hay cambios del origen)
+    - cron: "10 5 * * *"
+
+env:
+  TZ: Europe/Madrid
+  NODE_VERSION: 20
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install deps
+        run: |
+          npm ci || npm i
+
+      - name: Build feeds (Europe/Madrid)
+        run: |
+          node scripts/build_feeds.js
+
+      - name: Commit and push
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: actualiza feeds latest y mensuales"
+          branch: main
