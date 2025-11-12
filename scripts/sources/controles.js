@@ -1,32 +1,32 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const FILE = path.join('closures', 'calles_cortadas.geojson');
+const MANUAL = path.join('radars', 'manual', 'controles_oficiales.json');
 
-export async function getCortes() {
-  if (!fs.existsSync(FILE)) return [];
-  const gj = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-  const feats = Array.isArray(gj.features) ? gj.features : [];
-  return feats.map(f => {
-    const geom = f.geometry || {};
-    // Soporta Point o LineString (toma primer vértice)
-    let lat = null, lon = null;
-    if (geom.type === 'Point') {
-      [lon, lat] = geom.coordinates || [null, null];
-    } else if (geom.type === 'LineString' && Array.isArray(geom.coordinates) && geom.coordinates.length) {
-      [lon, lat] = geom.coordinates[0];
-    }
-    const p = f.properties || {};
-    return {
-      id: p.id ?? p.identificador ?? undefined,
-      descripcion: p.descripcion ?? p.motivo ?? p.name ?? '',
-      lat, lon,
-      desde: p.desde ?? p.start ?? null,
-      hasta: p.hasta ?? p.end ?? null,
-      franja: p.franja ? String(p.franja).toLowerCase() : null, // si ya la traes del lector
-      oficial: true,
-      organismo: p.organismo ?? 'Conservación',
-      fuente_url: p.fuente_url ?? null
-    };
-  }).filter(x => x.lat != null && x.lon != null);
+function ensureFile() {
+  const dir = path.dirname(MANUAL);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(MANUAL)) fs.writeFileSync(MANUAL, '[]', 'utf8');
 }
+
+export async function getControles() {
+  ensureFile();
+  const arr = JSON.parse(fs.readFileSync(MANUAL, 'utf8'));
+  return Array.isArray(arr) ? arr : [];
+}
+
+// Estructura sugerida para radars/manual/controles_oficiales.json:
+// [
+//   {
+//     "id": "c-001",
+//     "descripcion": "Control nocturno AV. Ordoño II",
+//     "lat": 42.5986,
+//     "lon": -5.5671,
+//     "desde": "2025-11-13T22:30:00+01:00",
+//     "hasta": "2025-11-14T01:30:00+01:00",
+//     "franja": "noche",
+//     "oficial": true,
+//     "organismo": "Policía Local León",
+//     "fuente_url": "https://...nota-prensa..."
+//   }
+// ]
