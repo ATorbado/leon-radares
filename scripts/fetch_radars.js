@@ -5,9 +5,10 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fetch as undiciFetch } from "undici";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
+const res = await fetch(url)
+const text = await res.text()
 const OUT = path.join(process.cwd(), "radars", "today.geojson");
 const LAST_PDF = path.join(process.cwd(), "radars", "latest_pdf.txt");
 const TZ = "Europe/Madrid";
