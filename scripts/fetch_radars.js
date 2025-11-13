@@ -7,8 +7,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
-const res = await fetch(url)
-const text = await res.text()
 const OUT = path.join(process.cwd(), "radars", "today.geojson");
 const LAST_PDF = path.join(process.cwd(), "radars", "latest_pdf.txt");
 const TZ = "Europe/Madrid";
@@ -16,11 +14,14 @@ const BBOX_LEON = "42.56,-5.62,42.65,-5.50"; // S,W,N,E aprox León capital
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 const USER_AGENT = "leon-radares/1.2 (+github actions)";
 
+// Usa el fetch global de Node 20
+const realFetch = globalThis.fetch;
+
 // -------------------- HTTP con reintentos --------------------
 async function fetch(url, opts = {}, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
-      const r = await undiciFetch(url, {
+      const r = await realFetch(url, {
         headers: { "User-Agent": USER_AGENT, ...(opts.headers || {}) },
         ...opts,
       });
