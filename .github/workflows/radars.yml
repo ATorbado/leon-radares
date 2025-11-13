@@ -1,4 +1,4 @@
-name: Actualizar radares
+name: Ejecutar3
 
 on:
   # 00:10 en Madrid ≈ 23:10 UTC en invierno
