@@ -6,8 +6,8 @@
     "build:feeds": "node scripts/build_feeds.js"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.3.1"
+    "fast-xml-parser": "^5.3.1",
     "luxon": "^3.5.0",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
   }
 }
