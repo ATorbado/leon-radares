@@ -1,6 +1,6 @@
 // scripts/fetch_radars.js
 // Genera radars/today.geojson con las calles de León que tienen radar móvil HOY.
-// Flujo: búsqueda SharePoint → crawler de noticias → patrones último año → caché.
+// Flujo: búsqueda SharePoint → crawler de noticias → patrones mes actual → caché.
 // PDF → texto con pdfjs-dist. Overpass tolerante para mapear nombres de vías.
 
 import fs from "node:fs/promises";
@@ -11,7 +11,10 @@ const OUT = path.join(process.cwd(), "radars", "today.geojson");
 const LAST_PDF = path.join(process.cwd(), "radars", "latest_pdf.txt");
 const TZ = "Europe/Madrid";
 const BBOX_LEON = "42.56,-5.62,42.65,-5.50"; // S,W,N,E aprox León capital
-const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+const MESES = [
+  "enero","febrero","marzo","abril","mayo","junio",
+  "julio","agosto","septiembre","octubre","noviembre","diciembre"
+];
 const USER_AGENT = "leon-radares/1.2 (+github actions)";
 
 // Usa el fetch global de Node 20
@@ -41,15 +44,16 @@ const OVERPASS_ENDPOINTS = [
 
 async function overpassRequest(q, triesPerHost = 2) {
   const body = "data=" + encodeURIComponent(q);
-  const headers = { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" };
+  const headers = {
+    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+  };
   for (const ep of OVERPASS_ENDPOINTS) {
     for (let i = 0; i < triesPerHost; i++) {
       try {
         const r = await fetch(ep, { method: "POST", headers, body });
         if (r.ok) {
-          // Algunos mirrors devuelven HTML de error; intenta parsear JSON
           const txt = await r.text();
-          try { return JSON.parse(txt); } catch { /* cae a retry */ }
+          try { return JSON.parse(txt); } catch { /* intenta siguiente */ }
         }
       } catch {}
       await new Promise(r => setTimeout(r, 800 + i * 600));
@@ -61,36 +65,53 @@ async function overpassRequest(q, triesPerHost = 2) {
 // -------------------- Fecha local ES --------------------
 function hoyES() {
   const f = new Intl.DateTimeFormat("es-ES", {
-    timeZone: TZ, year: "numeric", month: "numeric", day: "numeric",
+    timeZone: TZ,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
   });
   const parts = Object.fromEntries(
     f.formatToParts(new Date()).map(p => [p.type, p.value])
   );
-  return { day: Number(parts.day), month: Number(parts.month), year: Number(parts.year) };
+  return {
+    day: Number(parts.day),
+    month: Number(parts.month),
+    year: Number(parts.year),
+  };
 }
 
 // -------------------- Búsqueda SharePoint --------------------
 async function discoverRadarPDFViaSharePointSearchStrict() {
-  // URL EXACTA con filtro de ~últimos 30 días y palabra 'radar'
-  const searchUrl = "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx?k=radar#Default=%7B%22k%22%3A%22radar%22%2C%22r%22%3A%5B%7B%22n%22%3A%22LastModifiedTime%22%2C%22t%22%3A%5B%22range(2025-09-21T22%3A00%3A00Z%2C%20max%2C%20to%3D%5C%22le%5C%22)%22%5D%2C%22o%22%3A%22and%22%2C%22k%22%3Afalse%2C%22m%22%3Anull%7D%5D%2C%22l%22%3A3082%7D";
-  const base = "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx";
+  // URL con filtro por fecha y palabra radar (puede necesitar ajustes de rango)
+  const searchUrl =
+    "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx?k=radar#Default=%7B%22k%22%3A%22radar%22%2C%22r%22%3A%5B%7B%22n%22%3A%22LastModifiedTime%22%2C%22t%22%3A%5B%22range(2025-09-21T22%3A00%3A00Z%2C%20max%2C%20to%3D%5C%22le%5C%22)%22%5D%2C%22o%22%3A%22and%22%2C%22k%22%3Afalse%2C%22m%22%3Anull%7D%5D%2C%22l%22%3A3082%7D";
+  const base =
+    "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx";
 
   const { month, year } = hoyES();
   const mesNombre = MESES[month - 1];
 
   const html = await (await fetch(searchUrl)).text();
-  const LINK_RE = /(href|data-href|data-src)\s*=\s*(['"])(.*?)\2/gi;
-  const abs = (h) => { try { return new URL(h, base).toString(); } catch { return null; } };
+  const LINK_RE =
+    /(href|data-href|data-src)\s*=\s*(['"])(.*?)\2/gi;
+  const abs = (h) => {
+    try { return new URL(h, base).toString(); } catch { return null; }
+  };
 
   const pdfs = new Set();
   let m;
   while ((m = LINK_RE.exec(html)) !== null) {
     const u = abs(m[3]);
-    if (u && u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)) pdfs.add(u);
+    if (u && u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)) {
+      pdfs.add(u);
+    }
   }
-  if (!pdfs.size) throw new Error("SP strict: no hay PDFs en el rango dado.");
+  if (!pdfs.size) {
+    throw new Error("SP strict: no hay PDFs en el rango dado.");
+  }
 
-  const norm = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const norm = s =>
+    s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   const mesNorm = norm(mesNombre);
   const yearStr = String(year);
 
@@ -110,12 +131,14 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
       } catch {}
       scored.push({ u, lm });
     }
-    scored.sort((a,b) => b.lm - a.lm);
+    scored.sort((a, b) => b.lm - a.lm);
     return scored[0].u;
   }
 
-  // Si no hay coincidencia exacta, coge el más reciente del año actual.
-  const soloAnioActual = [...pdfs].filter(u => norm(decodeURIComponent(u)).includes(yearStr));
+  // Si no hay coincidencia exacta, coge el más reciente del año actual
+  const soloAnioActual = [...pdfs].filter(u =>
+    norm(decodeURIComponent(u)).includes(yearStr)
+  );
   if (soloAnioActual.length > 0) {
     const scored = [];
     for (const u of soloAnioActual) {
@@ -127,11 +150,13 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
       } catch {}
       scored.push({ u, lm });
     }
-    scored.sort((a,b) => b.lm - a.lm);
+    scored.sort((a, b) => b.lm - a.lm);
     return scored[0].u;
   }
 
-  throw new Error("SP strict: no hay PDF del mes/año actual en resultados.");
+  throw new Error(
+    "SP strict: no hay PDF del mes/año actual en resultados."
+  );
 }
 
 // -------------------- Crawler de noticias --------------------
@@ -139,25 +164,40 @@ const NEWS_PAGES = [
   "https://www.aytoleon.es/es/actualidad/noticias",
   "https://www.aytoleon.es/es/actualidad/noticias/Paginas/default.aspx",
 ];
-const LINK_RE = /(href|data-href|data-src)\s*=\s*(['"])(.*?)\2/gi;
-function abs(base, href) { try { return new URL(href, base).toString(); } catch { return null; } }
+const LINK_RE =
+  /(href|data-href|data-src)\s*=\s*(['"])(.*?)\2/gi;
+function abs(base, href) {
+  try { return new URL(href, base).toString(); } catch { return null; }
+}
 
 async function listCandidatePages() {
   const urls = new Set(NEWS_PAGES);
-  for (let i = 2; i <= 12; i++) urls.add(`https://www.aytoleon.es/es/actualidad/noticias?page=${i}`);
-  for (let i = 2; i <= 12; i++) urls.add(`https://www.aytoleon.es/es/actualidad/noticias/Paginas/default.aspx?Page=${i}`);
+  for (let i = 2; i <= 12; i++) {
+    urls.add(
+      `https://www.aytoleon.es/es/actualidad/noticias?page=${i}`
+    );
+  }
+  for (let i = 2; i <= 12; i++) {
+    urls.add(
+      `https://www.aytoleon.es/es/actualidad/noticias/Paginas/default.aspx?Page=${i}`
+    );
+  }
   return [...urls];
 }
+
 async function extractLinksFrom(url) {
   const html = await (await fetch(url)).text();
-  const out = []; let m;
+  const out = [];
+  let m;
   while ((m = LINK_RE.exec(html)) !== null) {
-    const u = abs(url, m[3]); if (u) out.push(u);
+    const u = abs(url, m[3]);
+    if (u) out.push(u);
   }
   return out;
 }
+
 function scoreByMonth(u, monthIdx, year) {
-  const mes = MESES[monthIdx-1];
+  const mes = MESES[monthIdx - 1];
   const s = decodeURIComponent(u).toLowerCase();
   let score = 0;
   if (s.includes("radares")) score += 5;
@@ -166,6 +206,7 @@ function scoreByMonth(u, monthIdx, year) {
   if (s.includes(String(year))) score += 2;
   return score;
 }
+
 async function discoverRadarPDFViaCrawler() {
   const { month, year } = hoyES();
   const pages = await listCandidatePages();
@@ -175,35 +216,45 @@ async function discoverRadarPDFViaCrawler() {
     try {
       const links = await extractLinksFrom(p);
       for (const l of links) {
-        if (l.toLowerCase().endsWith(".pdf") && /radares/i.test(l)) pdfs.add(l);
+        if (l.toLowerCase().endsWith(".pdf") && /radares/i.test(l)) {
+          pdfs.add(l);
+        }
         if (/\/articulos\//i.test(l)) pdfs.add(l);
       }
       if (pdfs.size > 80) break;
     } catch {}
   }
-  const arts = [...pdfs].filter(u => !u.toLowerCase().endsWith(".pdf")).slice(0, 60);
+
+  const arts = [...pdfs]
+    .filter(u => !u.toLowerCase().endsWith(".pdf"))
+    .slice(0, 60);
+
   for (const a of arts) {
     try {
       const links = await extractLinksFrom(a);
       for (const u of links) {
-        if (u.toLowerCase().endsWith(".pdf") && /radares/i.test(u)) pdfs.add(u);
+        if (u.toLowerCase().endsWith(".pdf") && /radares/i.test(u)) {
+          pdfs.add(u);
+        }
       }
     } catch {}
   }
+
   const ranked = [...pdfs]
     .filter(u => u.toLowerCase().endsWith(".pdf"))
     .map(u => ({ u, s: scoreByMonth(u, month, year) }))
-    .sort((a,b) => b.s - a.s);
+    .sort((a, b) => b.s - a.s);
 
   if (!ranked.length) throw new Error("Crawler: sin PDFs.");
   return ranked[0].u;
 }
 
-// -------------------- Patrones último año --------------------
+// -------------------- Patrones mes actual (fallback) --------------------
 const BASES = [
   "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias2/",
   "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias/",
 ];
+
 const VARIANTES = (mes, año) => [
   `Radares ${mes} ${año}.pdf`,
   `Radares mes de ${mes} de ${año}.pdf`,
@@ -212,40 +263,48 @@ const VARIANTES = (mes, año) => [
   `Radares_${mes}_${año}.pdf`,
   `Radares ${mes}-${año}.pdf`,
 ];
-function mesesAtras(n) {
-  const { month, year } = hoyES();
-  const arr = []; let m = month, y = year;
-  for (let i = 0; i < n; i++) {
-    const mes = MESES[m-1]; arr.push({ mes, año: y });
-    m--; if (m === 0) { m = 12; y--; }
-  }
-  return arr;
-}
+
 async function tryHeadOrRange(u) {
   try {
     let r = await fetch(u, { method: "HEAD" });
     if (r.ok) return true;
-    r = await fetch(u, { method: "GET", headers: { Range: "bytes=0-64" } });
+    r = await fetch(u, {
+      method: "GET",
+      headers: { Range: "bytes=0-64" },
+    });
     return r.ok;
-  } catch { return false; }
-}
-async function discoverRadarPDFFallback() {
-  const candidatos = [];
-  for (const { mes, año } of mesesAtras(12)) {
-    for (const base of BASES) for (const fn of VARIANTES(mes, año))
-      candidatos.push(base + encodeURIComponent(fn));
+  } catch {
+    return false;
   }
+}
+
+// SOLO intenta el mes actual; si no existe, que falle para ir a la caché
+async function discoverRadarPDFFallbackCurrentMonth() {
+  const { month, year } = hoyES();
+  const mes = MESES[month - 1];
+
+  const candidatos = [];
+  for (const base of BASES) {
+    for (const fn of VARIANTES(mes, year)) {
+      candidatos.push(base + encodeURIComponent(fn));
+    }
+  }
+
   for (const url of candidatos) {
     if (await tryHeadOrRange(url)) return url;
   }
-  throw new Error("Patrones: sin PDF.");
+  throw new Error("Patrones: sin PDF para el mes actual.");
 }
 
 // -------------------- Caché último PDF --------------------
 async function readCachedPDF() {
-  try { return (await fs.readFile(LAST_PDF, "utf8")).trim(); }
-  catch { return null; }
+  try {
+    return (await fs.readFile(LAST_PDF, "utf8")).trim();
+  } catch {
+    return null;
+  }
 }
+
 async function writeCachedPDF(url) {
   await fs.mkdir(path.dirname(LAST_PDF), { recursive: true });
   await fs.writeFile(LAST_PDF, url, "utf8");
@@ -268,42 +327,52 @@ async function pdfToTextFromUrl(url) {
 
 // -------------------- Parser del día --------------------
 function parseStreetsForDay(txt, day) {
-  // Patrones de inicio/fin
   const dayStart = String.raw`(^|\n)\s*${day}\s+`;
-  const nextDay  = String.raw`(?=(^|\n)\s*(?:[1-9]|[12]\d|3[01])\s+(mañana|tarde)|$)`;
+  const nextDay = String.raw`(?=(^|\n)\s*(?:[1-9]|[12]\d|3[01])\s+(mañana|tarde)|$)`;
 
-  // Captura explícita de mañana -> hasta "tarde" o siguiente día
-  const reManana = new RegExp(`${dayStart}mañana[\\s\\S]*?(?=(^|\\n)\\s*tarde\\b|${nextDay})`, "i");
-  // Captura explícita de tarde -> desde "tarde" hasta siguiente día
-  const reTarde  = new RegExp(`${dayStart}(?:mañana[\\s\\S]*?\\n\\s*)?tarde[\\s\\S]*?${nextDay}`, "i");
+  const reManana = new RegExp(
+    `${dayStart}mañana[\\s\\S]*?(?=(^|\\n)\\s*tarde\\b|${nextDay})`,
+    "i"
+  );
+  const reTarde = new RegExp(
+    `${dayStart}(?:mañana[\\s\\S]*?\\n\\s*)?tarde[\\s\\S]*?${nextDay}`,
+    "i"
+  );
 
   const bloques = [];
-  const m1 = txt.match(reManana); if (m1) bloques.push(m1[0]);
-  const m2 = txt.match(reTarde);  if (m2) bloques.push(m2[0]);
+  const m1 = txt.match(reManana);
+  if (m1) bloques.push(m1[0]);
+  const m2 = txt.match(reTarde);
+  if (m2) bloques.push(m2[0]);
 
-  const normalizar = (s) => s
-    .replace(/\bGABINETE DE COMUNICACIÓN\b/gi, " ")
-    .replace(/\b(mañana|tarde)\b/gi, " ")
-    .replace(/km\/h|velocidad.*?(\n|$)/gim, " ")
-    .replace(/(\s|^)(20|30|40|50|60|70|80|90|100)(\s|$)/g, " ")
-    .replace(/[0-9]{1,3}\s*$/gm, " ")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
+  const normalizar = (s) =>
+    s
+      .replace(/\bGABINETE DE COMUNICACIÓN\b/gi, " ")
+      .replace(/\b(mañana|tarde)\b/gi, " ")
+      .replace(/km\/h|velocidad.*?(\n|$)/gim, " ")
+      .replace(/(\s|^)(20|30|40|50|60|70|80|90|100)(\s|$)/g, " ")
+      .replace(/[0-9]{1,3}\s*$/gm, " ")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{2,}/g, "\n")
+      .trim();
 
-  const normVia = (s) => s
-    .replace(/\./g, " ")
-    .replace(/\b(avda?\.?|av\.)\b/gi, "Avenida")
-    .replace(/\b(c\/|c\.\s?|calle)\b/gi, "Calle")
-    .replace(/\b(de la|de los|de las|de|del)\b/gi, (m)=>m.toLowerCase())
-    .replace(/^\W+|\W+$/g, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  const normVia = (s) =>
+    s
+      .replace(/\./g, " ")
+      .replace(/\b(avda?\.?|av\.)\b/gi, "Avenida")
+      .replace(/\b(c\/|c\.\s?|calle)\b/gi, "Calle")
+      .replace(/\b(de la|de los|de las|de|del)\b/gi, (m) => m.toLowerCase())
+      .replace(/^\W+|\W+$/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
 
   const vias = new Set();
   for (const b of bloques) {
     const cleaned = normalizar(b);
-    const lines = cleaned.split(/\n+/).map(s => s.trim()).filter(Boolean);
+    const lines = cleaned
+      .split(/\n+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     for (const raw of lines) {
       if (/^(?:día|turno|\W*)$/i.test(raw)) continue;
       const v = normVia(raw);
@@ -315,49 +384,69 @@ function parseStreetsForDay(txt, day) {
 
 // -------------------- Overpass tolerante --------------------
 async function overpassWaysForName(name) {
-  const base = name.replace(/\./g, " ").replace(/\s{2,}/g, " ").trim();
+  const base = name
+    .replace(/\./g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
   const cores = new Set([
     base,
     base.replace(/\bAvenida\b/i, "").trim(),
     base.replace(/\bCalle\b/i, "").trim(),
   ]);
+
   const heads = ["", "Calle ", "Avenida ", "Paseo ", "Plaza ", "Glorieta "];
   const articles = ["", "de ", "del ", "de la ", "de los ", "de las "];
 
   const variants = new Set();
-  for (const c of cores) for (const h of heads) for (const a of articles)
-    variants.add((h + a + c).replace(/\s{2,}/g, " ").trim());
+  for (const c of cores) {
+    for (const h of heads) {
+      for (const a of articles) {
+        variants.add(
+          (h + a + c).replace(/\s{2,}/g, " ").trim()
+        );
+      }
+    }
+  }
 
   // Alias habituales
   variants.add("Avenida de los Peregrinos");
   variants.add("Calle La Corredera");
 
-  const esc = s => s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
-  const accent = c => ({a:"[aáà]",e:"[eéè]",i:"[iíì]",o:"[oóò]",u:"[uúùü]"}[c.toLowerCase()] || esc(c));
-  const toRegex = s => s.split(/\s+/).map(t => t.split("").map(accent).join("")).join(".*");
+  const esc = (s) =>
+    s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const accent = (c) =>
+    ({ a: "[aáà]", e: "[eéè]", i: "[iíì]", o: "[oóò]", u: "[uúùü]" }[
+      c.toLowerCase()
+    ] || esc(c));
+  const toRegex = (s) =>
+    s
+      .split(/\s+/)
+      .map((t) => t.split("").map(accent).join(""))
+      .join(".*");
 
   const tryQuery = async (filter) => {
     const q = `
 [out:json][timeout:25];
 way["name"${filter}](${BBOX_LEON});
 out geom;`;
-    const j = await overpassRequest(q); // ← usa mirrors + reintentos
+    const j = await overpassRequest(q);
     return (j.elements || [])
-      .filter(e => e.type === "way" && Array.isArray(e.geometry))
-      .map(e => e.geometry.map(p => [p.lon, p.lat]));
+      .filter((e) => e.type === "way" && Array.isArray(e.geometry))
+      .map((e) => e.geometry.map((p) => [p.lon, p.lat]));
   };
 
-  // Exactas
   for (const v of variants) {
     const lines = await tryQuery(`="${v}"`);
     if (lines.length) return lines;
   }
-  // Regex con flag i
+
   for (const v of variants) {
     const rx = toRegex(v);
     const lines = await tryQuery(`~"${rx}",i`);
     if (lines.length) return lines;
   }
+
   return [];
 }
 
@@ -368,17 +457,20 @@ async function main() {
 
   let pdfUrl = null;
   try {
-    pdfUrl = await discoverRadarPDFViaSharePointSearchStrict(); // filtro estricto
+    pdfUrl = await discoverRadarPDFViaSharePointSearchStrict();
   } catch (e1) {
     try {
       pdfUrl = await discoverRadarPDFViaCrawler();
     } catch {
       try {
-        pdfUrl = await discoverRadarPDFFallback();
+        pdfUrl = await discoverRadarPDFFallbackCurrentMonth();
       } catch {
         const cached = await readCachedPDF();
         if (cached) {
-          console.warn("Fallo SP strict + fallbacks. Usando caché:", cached);
+          console.warn(
+            "Fallo SP strict + fallbacks. Usando caché:",
+            cached
+          );
           pdfUrl = cached;
         } else {
           throw e1;
@@ -386,6 +478,7 @@ async function main() {
       }
     }
   }
+
   console.log("PDF usado:", pdfUrl);
   await writeCachedPDF(pdfUrl);
 
@@ -403,11 +496,12 @@ async function main() {
     features.push({
       type: "Feature",
       properties: { nombre: name, fuente: "Ayto León" },
-      geometry: mls.length === 1
-        ? { type: "LineString", coordinates: mls[0] }
-        : { type: "MultiLineString", coordinates: mls }
+      geometry:
+        mls.length === 1
+          ? { type: "LineString", coordinates: mls[0] }
+          : { type: "MultiLineString", coordinates: mls },
     });
-    await new Promise(r => setTimeout(r, 1000)); // cortesía Overpass
+    await new Promise((r) => setTimeout(r, 1000)); // cortesía Overpass
   }
 
   const fc = { type: "FeatureCollection", features };
@@ -415,7 +509,7 @@ async function main() {
   console.log(`Generado ${OUT} con ${features.length} calles`);
 }
 
-main().catch(async e => {
+main().catch(async (e) => {
   console.error("ERROR:", e.message);
   const fc = { type: "FeatureCollection", features: [] };
   await fs.mkdir(path.dirname(OUT), { recursive: true });
