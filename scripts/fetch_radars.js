@@ -80,16 +80,15 @@ function hoyES() {
   };
 }
 
-// -------------------- Búsqueda SharePoint --------------------
+// -------------------- Búsqueda SharePoint (tipo tu captura) --------------------
 async function discoverRadarPDFViaSharePointSearchStrict() {
-  // URL con filtro por fecha y palabra radar (puede necesitar ajustes de rango)
+  const { month, year } = hoyES();
+  const mesNombre = MESES[month - 1];       // ej: "noviembre"
+  const query = encodeURIComponent(`${mesNombre} radares ${year}`);
   const searchUrl =
-    "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx?k=radar#Default=%7B%22k%22%3A%22radar%22%2C%22r%22%3A%5B%7B%22n%22%3A%22LastModifiedTime%22%2C%22t%22%3A%5B%22range(2025-09-21T22%3A00%3A00Z%2C%20max%2C%20to%3D%5C%22le%5C%22)%22%5D%2C%22o%22%3A%22and%22%2C%22k%22%3Afalse%2C%22m%22%3Anull%7D%5D%2C%22l%22%3A3082%7D";
+    `https://www.aytoleon.es/_layouts/15/osssearchresults.aspx?k=${query}`;
   const base =
     "https://www.aytoleon.es/_layouts/15/osssearchresults.aspx";
-
-  const { month, year } = hoyES();
-  const mesNombre = MESES[month - 1];
 
   const html = await (await fetch(searchUrl)).text();
   const LINK_RE =
@@ -98,16 +97,15 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
     try { return new URL(h, base).toString(); } catch { return null; }
   };
 
-  const pdfs = new Set();
+  const links = new Set();
   let m;
   while ((m = LINK_RE.exec(html)) !== null) {
     const u = abs(m[3]);
-    if (u && u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)) {
-      pdfs.add(u);
-    }
+    if (u) links.add(u);
   }
-  if (!pdfs.size) {
-    throw new Error("SP strict: no hay PDFs en el rango dado.");
+
+  if (!links.size) {
+    throw new Error("SP strict: sin enlaces en resultados.");
   }
 
   const norm = s =>
@@ -115,47 +113,71 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
   const mesNorm = norm(mesNombre);
   const yearStr = String(year);
 
-  const exactos = [...pdfs].filter(u => {
-    const s = norm(decodeURIComponent(u));
-    return s.includes(mesNorm) && s.includes(yearStr);
-  });
-
-  if (exactos.length > 0) {
-    const scored = [];
-    for (const u of exactos) {
-      let lm = 0;
-      try {
-        const head = await fetch(u, { method: "HEAD" });
-        const lmStr = head.headers.get("last-modified");
-        if (lmStr) lm = Date.parse(lmStr) || 0;
-      } catch {}
-      scored.push({ u, lm });
-    }
-    scored.sort((a, b) => b.lm - a.lm);
-    return scored[0].u;
-  }
-
-  // Si no hay coincidencia exacta, coge el más reciente del año actual
-  const soloAnioActual = [...pdfs].filter(u =>
-    norm(decodeURIComponent(u)).includes(yearStr)
+  // 1) PDFs enlazados directamente desde resultados
+  const pdfsDirectos = [...links].filter(u =>
+    u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)
   );
-  if (soloAnioActual.length > 0) {
+
+  const elegirMejor = async (lista) => {
+    if (!lista.length) return null;
+
+    const candidatos = lista.map(u => {
+      const s = norm(decodeURIComponent(u));
+      const score =
+        (s.includes(mesNorm) ? 5 : 0) +
+        (s.includes(yearStr) ? 3 : 0);
+      return { u, score };
+    });
+
+    candidatos.sort((a, b) => b.score - a.score);
+    const topScore = candidatos[0].score;
+    const top = candidatos.filter(c => c.score === topScore);
+
     const scored = [];
-    for (const u of soloAnioActual) {
+    for (const c of top) {
       let lm = 0;
       try {
-        const head = await fetch(u, { method: "HEAD" });
+        const head = await fetch(c.u, { method: "HEAD" });
         const lmStr = head.headers.get("last-modified");
         if (lmStr) lm = Date.parse(lmStr) || 0;
       } catch {}
-      scored.push({ u, lm });
+      scored.push({ u: c.u, lm });
     }
     scored.sort((a, b) => b.lm - a.lm);
     return scored[0].u;
+  };
+
+  let elegido = await elegirMejor(pdfsDirectos);
+  if (elegido) return elegido;
+
+  // 2) Si no hay PDFs directos, entrar en las noticias y buscar el PDF dentro
+  const articles = [...links].filter(u =>
+    !u.toLowerCase().endsWith(".pdf")
+  );
+
+  const pdfsDesdeArticulos = new Set();
+  for (const art of articles) {
+    try {
+      const artHtml = await (await fetch(art)).text();
+      let m2;
+      while ((m2 = LINK_RE.exec(artHtml)) !== null) {
+        const u2 = abs(m2[3]);
+        if (
+          u2 &&
+          u2.toLowerCase().endsWith(".pdf") &&
+          /radares?/i.test(u2)
+        ) {
+          pdfsDesdeArticulos.add(u2);
+        }
+      }
+    } catch {}
   }
+
+  elegido = await elegirMejor([...pdfsDesdeArticulos]);
+  if (elegido) return elegido;
 
   throw new Error(
-    "SP strict: no hay PDF del mes/año actual en resultados."
+    "SP strict: no se ha encontrado PDF de radares para el mes actual."
   );
 }
 
@@ -166,8 +188,8 @@ const NEWS_PAGES = [
 ];
 const LINK_RE =
   /(href|data-href|data-src)\s*=\s*(['"])(.*?)\2/gi;
-function abs(base, href) {
-  try { return new URL(href, base).toString(); } catch { return null; }
+function abs(base2, href) {
+  try { return new URL(href, base2).toString(); } catch { return null; }
 }
 
 async function listCandidatePages() {
