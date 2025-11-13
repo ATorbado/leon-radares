@@ -80,11 +80,13 @@ function hoyES() {
   };
 }
 
-// -------------------- Búsqueda SharePoint (tipo tu captura) --------------------
+// -------------------- Búsqueda SharePoint --------------------
 async function discoverRadarPDFViaSharePointSearchStrict() {
   const { month, year } = hoyES();
   const mesNombre = MESES[month - 1];       // ej: "noviembre"
-  const query = encodeURIComponent(`${mesNombre} radares ${year}`);
+
+  // Hacemos la misma búsqueda que tú: "radares noviembre"
+  const query = encodeURIComponent(`radares ${mesNombre}`);
   const searchUrl =
     `https://www.aytoleon.es/_layouts/15/osssearchresults.aspx?k=${query}`;
   const base =
@@ -113,72 +115,40 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
   const mesNorm = norm(mesNombre);
   const yearStr = String(year);
 
-  // 1) PDFs enlazados directamente desde resultados
-  const pdfsDirectos = [...links].filter(u =>
+  // PDFs directos desde los resultados de búsqueda
+  const pdfs = [...links].filter(u =>
     u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)
   );
 
-  const elegirMejor = async (lista) => {
-    if (!lista.length) return null;
-
-    const candidatos = lista.map(u => {
-      const s = norm(decodeURIComponent(u));
-      const score =
-        (s.includes(mesNorm) ? 5 : 0) +
-        (s.includes(yearStr) ? 3 : 0);
-      return { u, score };
-    });
-
-    candidatos.sort((a, b) => b.score - a.score);
-    const topScore = candidatos[0].score;
-    const top = candidatos.filter(c => c.score === topScore);
-
-    const scored = [];
-    for (const c of top) {
-      let lm = 0;
-      try {
-        const head = await fetch(c.u, { method: "HEAD" });
-        const lmStr = head.headers.get("last-modified");
-        if (lmStr) lm = Date.parse(lmStr) || 0;
-      } catch {}
-      scored.push({ u: c.u, lm });
-    }
-    scored.sort((a, b) => b.lm - a.lm);
-    return scored[0].u;
-  };
-
-  let elegido = await elegirMejor(pdfsDirectos);
-  if (elegido) return elegido;
-
-  // 2) Si no hay PDFs directos, entrar en las noticias y buscar el PDF dentro
-  const articles = [...links].filter(u =>
-    !u.toLowerCase().endsWith(".pdf")
-  );
-
-  const pdfsDesdeArticulos = new Set();
-  for (const art of articles) {
-    try {
-      const artHtml = await (await fetch(art)).text();
-      let m2;
-      while ((m2 = LINK_RE.exec(artHtml)) !== null) {
-        const u2 = abs(m2[3]);
-        if (
-          u2 &&
-          u2.toLowerCase().endsWith(".pdf") &&
-          /radares?/i.test(u2)
-        ) {
-          pdfsDesdeArticulos.add(u2);
-        }
-      }
-    } catch {}
+  if (!pdfs.length) {
+    throw new Error("SP strict: no hay PDFs de radares en resultados.");
   }
 
-  elegido = await elegirMejor([...pdfsDesdeArticulos]);
-  if (elegido) return elegido;
+  // Elegir el mejor: que contenga el mes actual y, si hay varios, el más nuevo por Last-Modified
+  const candidatos = pdfs.map(u => {
+    const s = norm(decodeURIComponent(u));
+    let score = 0;
+    if (s.includes(mesNorm)) score += 5;   // nombre contiene "noviembre"
+    if (s.includes(yearStr)) score += 2;   // por si en el futuro vuelven a poner el año
+    return { u, score };
+  });
 
-  throw new Error(
-    "SP strict: no se ha encontrado PDF de radares para el mes actual."
-  );
+  candidatos.sort((a, b) => b.score - a.score);
+  const topScore = candidatos[0].score;
+  const top = candidatos.filter(c => c.score === topScore);
+
+  const scored = [];
+  for (const c of top) {
+    let lm = 0;
+    try {
+      const head = await fetch(c.u, { method: "HEAD" });
+      const lmStr = head.headers.get("last-modified");
+      if (lmStr) lm = Date.parse(lmStr) || 0;
+    } catch {}
+    scored.push({ u: c.u, lm });
+  }
+  scored.sort((a, b) => b.lm - a.lm);
+  return scored[0].u;
 }
 
 // -------------------- Crawler de noticias --------------------
