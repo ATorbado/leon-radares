@@ -1,7 +1,5 @@
 // scripts/fetch_radars.js
 // Genera radars/today.geojson con las calles de León que tienen radar móvil HOY.
-// Flujo: búsqueda SharePoint → crawler de noticias → patrones mes actual → caché.
-// PDF → texto con pdfjs-dist. Overpass tolerante para mapear nombres de vías.
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -35,7 +33,7 @@ async function fetch(url, opts = {}, retries = 3) {
   throw new Error(`HTTP fail: ${url}`);
 }
 
-// -------------------- Mirrors y helper para Overpass --------------------
+// -------------------- Overpass helper --------------------
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://z.overpass-api.de/api/interpreter",
@@ -53,7 +51,7 @@ async function overpassRequest(q, triesPerHost = 2) {
         const r = await fetch(ep, { method: "POST", headers, body });
         if (r.ok) {
           const txt = await r.text();
-          try { return JSON.parse(txt); } catch { /* intenta siguiente */ }
+          try { return JSON.parse(txt); } catch {}
         }
       } catch {}
       await new Promise(r => setTimeout(r, 800 + i * 600));
@@ -80,12 +78,64 @@ function hoyES() {
   };
 }
 
-// -------------------- Búsqueda SharePoint --------------------
+// -------------------- 0) Adivinar URL directa del mes actual --------------------
+const BASES = [
+  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias2/",
+  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias/",
+];
+
+const VARIANTES = (mes, año) => [
+  `Radares ${mes}.pdf`,               // Radares noviembre.pdf (caso actual)
+  `Radares ${mes} ${año}.pdf`,
+  `Radares mes de ${mes}.pdf`,
+  `Radares mes de ${mes} de ${año}.pdf`,
+  `Radares móviles ${mes} ${año}.pdf`,
+  `Radares movilidad ${mes} ${año}.pdf`,
+  `Radares_${mes}_${año}.pdf`,
+  `Radares ${mes}-${año}.pdf`,
+];
+
+async function tryHeadOrRange(u) {
+  try {
+    let r = await fetch(u, { method: "HEAD" });
+    if (r.ok) return true;
+    r = await fetch(u, {
+      method: "GET",
+      headers: { Range: "bytes=0-64" },
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// intenta directamente URLs tipo Radares noviembre.pdf en las carpetas conocidas
+async function discoverRadarPDFDirectGuessCurrentMonth() {
+  const { month, year } = hoyES();
+  const mes = MESES[month - 1];
+
+  const candidatos = [];
+  for (const base of BASES) {
+    for (const fn of VARIANTES(mes, year)) {
+      candidatos.push(base + encodeURIComponent(fn));
+    }
+  }
+
+  for (const url of candidatos) {
+    if (await tryHeadOrRange(url)) {
+      console.log("Fuente PDF: adivinado directo mes actual");
+      return url;
+    }
+  }
+  throw new Error("Direct guess: sin PDF para el mes actual.");
+}
+
+// -------------------- 1) Búsqueda SharePoint --------------------
 async function discoverRadarPDFViaSharePointSearchStrict() {
   const { month, year } = hoyES();
   const mesNombre = MESES[month - 1];       // ej: "noviembre"
 
-  // Hacemos la misma búsqueda que tú: "radares noviembre"
+  // Igual que haces tú: "radares noviembre"
   const query = encodeURIComponent(`radares ${mesNombre}`);
   const searchUrl =
     `https://www.aytoleon.es/_layouts/15/osssearchresults.aspx?k=${query}`;
@@ -105,7 +155,6 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
     const u = abs(m[3]);
     if (u) links.add(u);
   }
-
   if (!links.size) {
     throw new Error("SP strict: sin enlaces en resultados.");
   }
@@ -115,21 +164,18 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
   const mesNorm = norm(mesNombre);
   const yearStr = String(year);
 
-  // PDFs directos desde los resultados de búsqueda
   const pdfs = [...links].filter(u =>
     u.toLowerCase().endsWith(".pdf") && /radares?/i.test(u)
   );
-
   if (!pdfs.length) {
     throw new Error("SP strict: no hay PDFs de radares en resultados.");
   }
 
-  // Elegir el mejor: que contenga el mes actual y, si hay varios, el más nuevo por Last-Modified
   const candidatos = pdfs.map(u => {
     const s = norm(decodeURIComponent(u));
     let score = 0;
-    if (s.includes(mesNorm)) score += 5;   // nombre contiene "noviembre"
-    if (s.includes(yearStr)) score += 2;   // por si en el futuro vuelven a poner el año
+    if (s.includes(mesNorm)) score += 5;
+    if (s.includes(yearStr)) score += 2;
     return { u, score };
   });
 
@@ -148,10 +194,12 @@ async function discoverRadarPDFViaSharePointSearchStrict() {
     scored.push({ u: c.u, lm });
   }
   scored.sort((a, b) => b.lm - a.lm);
+
+  console.log("Fuente PDF: SharePoint search");
   return scored[0].u;
 }
 
-// -------------------- Crawler de noticias --------------------
+// -------------------- 2) Crawler de noticias --------------------
 const NEWS_PAGES = [
   "https://www.aytoleon.es/es/actualidad/noticias",
   "https://www.aytoleon.es/es/actualidad/noticias/Paginas/default.aspx",
@@ -238,39 +286,11 @@ async function discoverRadarPDFViaCrawler() {
     .sort((a, b) => b.s - a.s);
 
   if (!ranked.length) throw new Error("Crawler: sin PDFs.");
+  console.log("Fuente PDF: crawler noticias");
   return ranked[0].u;
 }
 
-// -------------------- Patrones mes actual (fallback) --------------------
-const BASES = [
-  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias2/",
-  "https://www.aytoleon.es/es/actualidad/noticias/articulos/SiteAssets/Lists/EntradasDeBlog/Noticias/",
-];
-
-const VARIANTES = (mes, año) => [
-  `Radares ${mes} ${año}.pdf`,
-  `Radares mes de ${mes} de ${año}.pdf`,
-  `Radares móviles ${mes} ${año}.pdf`,
-  `Radares movilidad ${mes} ${año}.pdf`,
-  `Radares_${mes}_${año}.pdf`,
-  `Radares ${mes}-${año}.pdf`,
-];
-
-async function tryHeadOrRange(u) {
-  try {
-    let r = await fetch(u, { method: "HEAD" });
-    if (r.ok) return true;
-    r = await fetch(u, {
-      method: "GET",
-      headers: { Range: "bytes=0-64" },
-    });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
-// SOLO intenta el mes actual; si no existe, que falle para ir a la caché
+// -------------------- 3) Fallback SOLO mes actual --------------------
 async function discoverRadarPDFFallbackCurrentMonth() {
   const { month, year } = hoyES();
   const mes = MESES[month - 1];
@@ -283,7 +303,10 @@ async function discoverRadarPDFFallbackCurrentMonth() {
   }
 
   for (const url of candidatos) {
-    if (await tryHeadOrRange(url)) return url;
+    if (await tryHeadOrRange(url)) {
+      console.log("Fuente PDF: fallback patrones mes actual");
+      return url;
+    }
   }
   throw new Error("Patrones: sin PDF para el mes actual.");
 }
@@ -432,7 +455,6 @@ out geom;`;
     const lines = await tryQuery(`="${v}"`);
     if (lines.length) return lines;
   }
-
   for (const v of variants) {
     const rx = toRegex(v);
     const lines = await tryQuery(`~"${rx}",i`);
@@ -448,24 +470,33 @@ async function main() {
   await fs.mkdir(path.dirname(OUT), { recursive: true });
 
   let pdfUrl = null;
+
   try {
-    pdfUrl = await discoverRadarPDFViaSharePointSearchStrict();
-  } catch (e1) {
+    pdfUrl = await discoverRadarPDFDirectGuessCurrentMonth();
+  } catch (e0) {
+    console.warn(e0.message);
     try {
-      pdfUrl = await discoverRadarPDFViaCrawler();
-    } catch {
+      pdfUrl = await discoverRadarPDFViaSharePointSearchStrict();
+    } catch (e1) {
+      console.warn(e1.message);
       try {
-        pdfUrl = await discoverRadarPDFFallbackCurrentMonth();
-      } catch {
-        const cached = await readCachedPDF();
-        if (cached) {
-          console.warn(
-            "Fallo SP strict + fallbacks. Usando caché:",
-            cached
-          );
-          pdfUrl = cached;
-        } else {
-          throw e1;
+        pdfUrl = await discoverRadarPDFViaCrawler();
+      } catch (e2) {
+        console.warn(e2.message);
+        try {
+          pdfUrl = await discoverRadarPDFFallbackCurrentMonth();
+        } catch (e3) {
+          console.warn(e3.message);
+          const cached = await readCachedPDF();
+          if (cached) {
+            console.warn(
+              "Fallo SP + crawler + fallback. Usando caché:",
+              cached
+            );
+            pdfUrl = cached;
+          } else {
+            throw e3;
+          }
         }
       }
     }
@@ -493,7 +524,7 @@ async function main() {
           ? { type: "LineString", coordinates: mls[0] }
           : { type: "MultiLineString", coordinates: mls },
     });
-    await new Promise((r) => setTimeout(r, 1000)); // cortesía Overpass
+    await new Promise((r) => setTimeout(r, 1000));
   }
 
   const fc = { type: "FeatureCollection", features };
