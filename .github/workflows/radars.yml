@@ -17,6 +17,39 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Limpieza inicial: dejar de trackear node_modules y añadirlo a .gitignore
+      - name: Preparar repo (ignorar node_modules)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git pull --rebase origin main || true
+
+          # Asegurar entrada en .gitignore
+          if [ ! -f .gitignore ] || ! grep -q "^node_modules/" .gitignore; then
+            echo "node_modules/" >> .gitignore
+            NEED_COMMIT=1
+          else
+            NEED_COMMIT=0
+          fi
+
+          # Si node_modules está trackeado, dejar de trackearlo
+          if git ls-files --error-unmatch node_modules >/dev/null 2>&1; then
+            git rm -r --cached node_modules || true
+            NEED_COMMIT=1
+          fi
+
+          if [ "${NEED_COMMIT:-0}" -eq 1 ]; then
+            git add .gitignore || true
+            git commit -m "Stop tracking node_modules" || true
+            git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main || true
+          else
+            echo "node_modules ya ignorado y no trackeado"
+          fi
+
       # 1) Node para cortes + controles
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -24,7 +57,7 @@ jobs:
           node-version: 20
 
       - name: Instalar dependencias Node
-        run: npm install --prefer-online --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Ejecutar build_feeds.js (cortes + controles)
         run: node scripts/build_feeds.js
@@ -37,7 +70,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add -A
+          # Solo radars, nunca node_modules ni resto
+          git add radars || true
 
           if git diff --cached --quiet; then
             echo "Nada que commitear (cortes/controles)"
@@ -68,7 +102,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add -A
+          git add radars || true
 
           if git diff --cached --quiet; then
             echo "Nada que commitear (radares fijos XLSX)"
@@ -77,7 +111,7 @@ jobs:
 
           git commit -m "Actualiza radares fijos (XLSX DGT)"
           git pull --rebase origin main
-          git push "https://x-access-token:${GITHUB_TOKEN}}@github.com/${{ github.repository }}.git" HEAD:main
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main
 
       # 3) Python para radares fijos urbanos León (API / DATEX2)
       - name: Ejecutar fetch_dgt_api.py (radares fijos urbanos León)
@@ -91,7 +125,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add -A
+          git add radars || true
 
           if git diff --cached --quiet; then
             echo "Nada que commitear (radares fijos urbanos)"
@@ -114,7 +148,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add -A
+          git add radars || true
 
           if git diff --cached --quiet; then
             echo "Nada que commitear (radares móviles)"
