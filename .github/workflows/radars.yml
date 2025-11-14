@@ -1,4 +1,4 @@
-name: Ejecutar3
+name: Radars
 
 on:
   # 00:10 aprox en Madrid (23:10 UTC en invierno)
@@ -7,15 +7,16 @@ on:
   workflow_dispatch:
 
 jobs:
-
-  # 1) build_feeds.js (cortes + controles + BOE)
-  build_cortes_controles:
+  build_and_push_radars:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
+      # 1) Node para cortes + controles (incluye BOE)
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -24,19 +25,10 @@ jobs:
       - name: Instalar dependencias Node
         run: npm install --prefer-online --no-audit --no-fund
 
-      - name: Ejecutar build_feeds.js
+      - name: Ejecutar build_feeds.js (cortes + controles)
         run: node scripts/build_feeds.js
 
-
-  # 2) fetch_dgt.py (radares fijos sin coordenadas – XLSX oficial)
-  fetch_dgt:
-    needs: build_cortes_controles
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      # 2) Python para radares fijos (XLSX DGT)
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -45,44 +37,26 @@ jobs:
       - name: Instalar dependencias Python
         run: pip install openpyxl
 
-      - name: Ejecutar fetch_dgt.py
+      - name: Ejecutar fetch_dgt.py (radares fijos XLSX)
         run: python scripts/fetch_dgt.py
 
-
-  # 3) fetch_dgt_api.py (radares fijos URBANOS con calle)
-  fetch_dgt_api:
-    needs: fetch_dgt
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Ejecutar fetch_dgt_api.py
+      # 3) Python para radares fijos urbanos León (DATEX2 DGT)
+      - name: Ejecutar fetch_dgt_api.py (radares fijos urbanos León)
         run: python scripts/fetch_dgt_api.py
 
-
-  # 4) fetch_radars.js (radares móviles hoy) — ÚLTIMO SIEMPRE
-  fetch_radars:
-    needs: fetch_dgt_api    # <--- Esto garantiza que sea SIEMPRE el último
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Instalar dependencias Node
-        run: npm install --prefer-online --no-audit --no-fund
-
-      - name: Ejecutar fetch_radars.js
+      # 4) Node para radares móviles (deja esto SIEMPRE el último)
+      - name: Ejecutar fetch_radars.js (radares móviles)
         run: node scripts/fetch_radars.js
+
+      # 5) Commit + push de todos los JSON generados
+      - name: Commit y push de radars
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # añade todos los JSON de radars
+          git add radars/*.json radars/latest/*.json || true
+
+          git commit -m "Actualiza feeds de cortes, controles y radares" || echo "Nada que commitear"
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
