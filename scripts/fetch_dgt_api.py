@@ -62,7 +62,6 @@ def main():
     out = []
     seen = set()  # para eliminar duplicados (lat, lon, desc)
 
-    # Recorremos todos los predefinedLocation
     for pl in root.iter():
         if not tag_endswith(pl, "predefinedLocation"):
             continue
@@ -71,9 +70,7 @@ def main():
         lat = None
         lon = None
 
-        # Buscamos textos útiles (nombre de la localización, nombre de vía, etc.)
         for child in pl.iter():
-            # cualquier "value" bajo nombres de localización / vía
             if (
                 tag_endswith(child, "value")
                 or tag_endswith(child, "roadName")
@@ -85,7 +82,6 @@ def main():
                     if txt and txt not in desc_parts:
                         desc_parts.append(txt)
 
-            # Coordenadas
             if tag_endswith(child, "latitude"):
                 try:
                     lat = float(child.text.replace(",", "."))
@@ -114,12 +110,20 @@ def main():
             continue
         seen.add(key)
 
+        # IMPORTANTE: adaptamos el formato al que usa la app (Incidencia)
         out.append(
             {
-                "calle": desc,
+                "id": f"dgt_fijo_{round(lat,5)}_{round(lon,5)}",
+                "tipo": "control",  # para que entre en el filtro de "Controles"
+                "descripcion": f"Radar fijo · {desc}",
                 "lat": lat,
                 "lon": lon,
-                "tipo": "Fijo",
+                "desde": None,
+                "hasta": None,
+                "oficial": True,
+                "organismo": "DGT",
+                "fuente_url": "https://infocar.dgt.es/etraffic",
+                # campo extra opcional, la app lo ignorará
                 "dist_km_leon": round(dist, 2),
             }
         )
@@ -137,4 +141,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
