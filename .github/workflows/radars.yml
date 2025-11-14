@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # 1) build_feeds.js (cortes y controles) -------------------------------
+
+  # 1) build_feeds.js (cortes + controles + BOE)
   build_cortes_controles:
     runs-on: ubuntu-latest
 
@@ -26,7 +27,7 @@ jobs:
       - name: Ejecutar build_feeds.js
         run: node scripts/build_feeds.js
 
-  # 2) fetch_dgt.py (radares fijos DGT) ----------------------------------
+  # 2) fetch_dgt.py (radares fijos DGT)
   fetch_dgt:
     needs: build_cortes_controles
     runs-on: ubuntu-latest
@@ -41,16 +42,14 @@ jobs:
           python-version: '3.11'
 
       - name: Instalar dependencias Python
-        # si ya tienes requirements.txt, cambia esta línea:
-        # run: pip install -r requirements.txt
         run: pip install openpyxl
 
       - name: Ejecutar fetch_dgt.py
         run: python scripts/fetch_dgt.py
 
-  # 3) fetch_radars.js (radares móviles hoy) ------------------------------
+  # 3) fetch_radars.js (radares móviles hoy) — ÚLTIMO SIEMPRE
   fetch_radars:
-    needs: fetch_dgt
+    needs: fetch_dgt    # <--- esto garantiza que sea LO ÚLTIMO
     runs-on: ubuntu-latest
 
     steps:
