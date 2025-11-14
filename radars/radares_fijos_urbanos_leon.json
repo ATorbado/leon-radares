@@ -1,0 +1,86 @@
+[
+  {
+    "calle": "",
+    "lat": 42.5739,
+    "lon": -5.6571,
+    "tipo": "Fijo",
+    "dist_km_leon": 7.87
+  },
+  {
+    "calle": "",
+    "lat": 42.5739,
+    "lon": -5.6571,
+    "tipo": "Fijo",
+    "dist_km_leon": 7.87
+  },
+  {
+    "calle": "",
+    "lat": 42.5771,
+    "lon": -5.6494,
+    "tipo": "Fijo",
+    "dist_km_leon": 7.15
+  },
+  {
+    "calle": "",
+    "lat": 42.5771,
+    "lon": -5.6494,
+    "tipo": "Fijo",
+    "dist_km_leon": 7.15
+  },
+  {
+    "calle": "",
+    "lat": 42.5478,
+    "lon": -5.6207,
+    "tipo": "Fijo",
+    "dist_km_leon": 7.16
+  },
+  {
+    "calle": "",
+    "lat": 42.5478,
+    "lon": -5.6207,
+    "tipo": "Fijo",
+    "dist_km_leon": 7.16
+  },
+  {
+    "calle": "",
+    "lat": 42.5482,
+    "lon": -5.6217,
+    "tipo": "Fijo",
+    "dist_km_leon": 7.18
+  },
+  {
+    "calle": "",
+    "lat": 42.5482,
+    "lon": -5.6217,
+    "tipo": "Fijo",
+    "dist_km_leon": 7.18
+  },
+  {
+    "calle": "",
+    "lat": 42.5881,
+    "lon": -5.6229,
+    "tipo": "Fijo",
+    "dist_km_leon": 4.72
+  },
+  {
+    "calle": "",
+    "lat": 42.5881,
+    "lon": -5.6229,
+    "tipo": "Fijo",
+    "dist_km_leon": 4.72
+  },
+  {
+    "calle": "",
+    "lat": 42.5813,
+    "lon": -5.6735,
+    "tipo": "Fijo",
+    "dist_km_leon": 8.92
+  },
+  {
+    "calle": "",
+    "lat": 42.5813,
+    "lon": -5.6735,
+    "tipo": "Fijo",
+    "dist_km_leon": 8.92
+  }
+]
