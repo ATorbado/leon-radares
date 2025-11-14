@@ -31,6 +31,10 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 
+def tag_endswith(elem, suffix):
+    return elem.tag.endswith("}" + suffix) or elem.tag == suffix
+
+
 def main():
     print("Descargando radares fijos DGT (DATEX2)…")
 
@@ -39,7 +43,6 @@ def main():
             data = resp.read()
     except Exception as e:
         print("No se ha podido descargar el XML de radares DGT:", e)
-        # No queremos que falle el workflow: dejamos archivo vacío
         Path("radars").mkdir(exist_ok=True)
         Path("radars/radares_fijos_urbanos_leon.json").write_text(
             "[]", encoding="utf-8"
@@ -57,30 +60,32 @@ def main():
         return
 
     out = []
+    seen = set()  # para eliminar duplicados (lat, lon, desc)
 
-    # DATEX2 usa namespaces; los ignoramos comparando por sufijo del tag
-    def tag_endswith(elem, suffix):
-        return elem.tag.endswith("}" + suffix) or elem.tag == suffix
-
-    # Buscar todos los predefinedLocation
+    # Recorremos todos los predefinedLocation
     for pl in root.iter():
         if not tag_endswith(pl, "predefinedLocation"):
             continue
 
-        desc = ""
+        desc_parts = []
         lat = None
         lon = None
 
-        # Intentar obtener un nombre / descripción
+        # Buscamos textos útiles (nombre de la localización, nombre de vía, etc.)
         for child in pl.iter():
-            # Nombre de la localización (puede variar según versión de DATEX2)
-            if tag_endswith(child, "predefinedLocationName") or tag_endswith(
-                child, "name"
+            # cualquier "value" bajo nombres de localización / vía
+            if (
+                tag_endswith(child, "value")
+                or tag_endswith(child, "roadName")
+                or tag_endswith(child, "locationName")
+                or tag_endswith(child, "predefinedLocationName")
             ):
                 if child.text:
-                    desc = child.text.strip()
+                    txt = child.text.strip()
+                    if txt and txt not in desc_parts:
+                        desc_parts.append(txt)
 
-            # Coordenadas (normalmente bajo locationForDisplay, coordinates, etc.)
+            # Coordenadas
             if tag_endswith(child, "latitude"):
                 try:
                     lat = float(child.text.replace(",", "."))
@@ -92,13 +97,22 @@ def main():
                 except Exception:
                     pass
 
-        # Si no hay lat/lon no podemos filtrar por radio
         if lat is None or lon is None:
             continue
 
         dist = haversine(LEON_LAT, LEON_LON, lat, lon)
         if dist > RADIUS_KM:
             continue
+
+        if desc_parts:
+            desc = " - ".join(desc_parts)
+        else:
+            desc = "Radar fijo (sin descripción DGT)"
+
+        key = (round(lat, 5), round(lon, 5), desc)
+        if key in seen:
+            continue
+        seen.add(key)
 
         out.append(
             {
@@ -123,3 +137,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
