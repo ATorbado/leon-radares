@@ -14,6 +14,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0          # necesario para poder hacer pull --rebase
           persist-credentials: false
 
       # 1) Node para cortes + controles (incluye BOE)
@@ -55,8 +56,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # añade todos los JSON de radars
-          git add radars/*.json radars/latest/*.json || true
+          # Añade todos los JSON de radars (incluye el nuevo radares_fijos_sin_coord.json)
+          git add radars/*.json radars/latest/*.json radars/radares_fijos_sin_coord.json || true
 
-          git commit -m "Actualiza feeds de cortes, controles y radares" || echo "Nada que commitear"
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
+          if git diff --cached --quiet; then
+            echo "Nada que commitear"
+          else
+            git commit -m "Actualiza feeds de cortes, controles y radares"
+          fi
+
+          # Traer cambios nuevos de main y rebasar para evitar 'fetch first'
+          git pull --rebase origin main
+
+          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:main
