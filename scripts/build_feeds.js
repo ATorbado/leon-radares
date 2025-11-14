@@ -1,22 +1,17 @@
+// scripts/build_feeds.js
 import { DateTime } from "luxon";
 import fs from "node:fs";
 import path from "node:path";
 
 import { getCortes } from "./sources/cortes.js";
 import { getControles } from "./sources/controles.js";
-import { getControlesBOE } from "./sources/controles_boe.js";
 
 async function main() {
   const now = DateTime.now();
 
   const cortesSrc = await getCortes(now);
+  const controlesSrc = await getControles(now);
 
-  const controlesSrc = [
-    ...(await getControles(now)),
-    ...(await getControlesBOE(now))
-  ];
-
-  const year = now.toFormat("yyyy");
   const ym = now.toFormat("yyyy-MM");
 
   const outDir = path.join("radars", ym);
