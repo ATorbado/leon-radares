@@ -100,6 +100,7 @@ def main():
         if dist > RADIUS_KM:
             continue
 
+        # Descripción = texto tal cual de la DGT (calle / ubicación)
         if desc_parts:
             desc = " - ".join(desc_parts)
         else:
@@ -110,12 +111,12 @@ def main():
             continue
         seen.add(key)
 
-        # IMPORTANTE: adaptamos el formato al que usa la app (Incidencia)
         out.append(
             {
                 "id": f"dgt_fijo_{round(lat,5)}_{round(lon,5)}",
-                "tipo": "control",  # para que entre en el filtro de "Controles"
-                "descripcion": f"Radar fijo · {desc}",
+                "tipo": "control",          # entra como control en la app
+                "subtipo": "radar_fijo",    # para distinguirlo en la UI
+                "descripcion": desc,        # aquí va la "calle" / ubicación
                 "lat": lat,
                 "lon": lon,
                 "desde": None,
@@ -123,7 +124,6 @@ def main():
                 "oficial": True,
                 "organismo": "DGT",
                 "fuente_url": "https://infocar.dgt.es/etraffic",
-                # campo extra opcional, la app lo ignorará
                 "dist_km_leon": round(dist, 2),
             }
         )
