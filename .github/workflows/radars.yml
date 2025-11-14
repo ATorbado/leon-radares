@@ -27,7 +27,8 @@ jobs:
       - name: Ejecutar build_feeds.js
         run: node scripts/build_feeds.js
 
-  # 2) fetch_dgt.py (radares fijos DGT)
+
+  # 2) fetch_dgt.py (radares fijos sin coordenadas – XLSX oficial)
   fetch_dgt:
     needs: build_cortes_controles
     runs-on: ubuntu-latest
@@ -47,9 +48,28 @@ jobs:
       - name: Ejecutar fetch_dgt.py
         run: python scripts/fetch_dgt.py
 
-  # 3) fetch_radars.js (radares móviles hoy) — ÚLTIMO SIEMPRE
+
+  # 3) fetch_dgt_api.py (radares fijos URBANOS con calle)
+  fetch_dgt_api:
+    needs: fetch_dgt
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Ejecutar fetch_dgt_api.py
+        run: python scripts/fetch_dgt_api.py
+
+
+  # 4) fetch_radars.js (radares móviles hoy) — ÚLTIMO SIEMPRE
   fetch_radars:
-    needs: fetch_dgt    # <--- esto garantiza que sea LO ÚLTIMO
+    needs: fetch_dgt_api    # <--- Esto garantiza que sea SIEMPRE el último
     runs-on: ubuntu-latest
 
     steps:
