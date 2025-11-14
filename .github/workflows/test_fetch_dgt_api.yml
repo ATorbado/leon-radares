@@ -22,3 +22,12 @@ jobs:
           echo "Contenido generado:"
           ls -R
           cat radars/radares_fijos_urbanos_leon.json || echo "No se generó el JSON"
+
+      - name: Commit y push de radares fijos urbanos León
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add radars/radares_fijos_urbanos_leon.json
+          git commit -m "Actualiza radares fijos urbanos León" || echo "Nada que commitear"
+          git push
