@@ -1,14 +1,13 @@
 name: Ejecutar3
 
 on:
-  # 00:10 en Madrid ≈ 23:10 UTC en invierno
+  # 00:10 aprox en Madrid (23:10 UTC en invierno)
   schedule:
     - cron: '10 23 * * *'
-  # Para poder lanzarlo a mano desde la pestaña "Actions"
   workflow_dispatch:
 
 jobs:
-  # 1) build_feeds.js (cortes y controles) ------------------------------------
+  # 1) build_feeds.js (cortes y controles) -------------------------------
   build_cortes_controles:
     runs-on: ubuntu-latest
 
@@ -21,15 +20,15 @@ jobs:
         with:
           node-version: 20
 
-      - name: Instalar dependencias
-        run: npm ci
+      - name: Instalar dependencias Node
+        run: npm install --prefer-online --no-audit --no-fund
 
       - name: Ejecutar build_feeds.js
         run: node scripts/build_feeds.js
 
-  # 2) fetch_dgt.py (radares fijos DGT) ---------------------------------------
+  # 2) fetch_dgt.py (radares fijos DGT) ----------------------------------
   fetch_dgt:
-    needs: build_cortes_controles    # NO empieza hasta que acabe el anterior
+    needs: build_cortes_controles
     runs-on: ubuntu-latest
 
     steps:
@@ -42,16 +41,16 @@ jobs:
           python-version: '3.11'
 
       - name: Instalar dependencias Python
-        # Si tienes requirements.txt, cambia esta línea por:
+        # si ya tienes requirements.txt, cambia esta línea:
         # run: pip install -r requirements.txt
         run: pip install openpyxl
 
       - name: Ejecutar fetch_dgt.py
         run: python scripts/fetch_dgt.py
 
-  # 3) fetch_radars.js (radares móviles HOY) ----------------------------------
+  # 3) fetch_radars.js (radares móviles hoy) ------------------------------
   fetch_radars:
-    needs: fetch_dgt                 # NO empieza hasta que acabe fetch_dgt
+    needs: fetch_dgt
     runs-on: ubuntu-latest
 
     steps:
@@ -63,8 +62,8 @@ jobs:
         with:
           node-version: 20
 
-      - name: Instalar dependencias
-        run: npm ci
+      - name: Instalar dependencias Node
+        run: npm install --prefer-online --no-audit --no-fund
 
       - name: Ejecutar fetch_radars.js
         run: node scripts/fetch_radars.js
