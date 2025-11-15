@@ -24,7 +24,7 @@ jobs:
           node-version: 20
 
       - name: Instalar dependencias Node
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Ejecutar build_feeds.js (cortes + controles)
         run: node scripts/build_feeds.js
@@ -37,7 +37,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Solo radars, nunca node_modules ni resto
           git add radars || true
 
           if git diff --cached --quiet; then
