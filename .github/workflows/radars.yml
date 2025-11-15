@@ -24,7 +24,7 @@ jobs:
           node-version: 20
 
       - name: Instalar dependencias Node
-        run: npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund --package-lock=false
 
       - name: Ejecutar build_feeds.js (cortes + controles)
         run: node scripts/build_feeds.js
